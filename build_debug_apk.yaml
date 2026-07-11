@@ -1,0 +1,84 @@
+name: Build Android APK (with HF secrets + artifact upload)
+
+# Manual trigger from the Actions tab, plus automatic runs on push/PR to any branch touching
+# Android/**. Unlike the stock build_android.yaml (which only builds on push/PR to `main`), this
+# also runs on your working branches — adjust the `branches:` filters below once you know your
+# actual branch naming.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "Android/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "Android/**"
+
+jobs:
+  build_apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./Android/src
+    steps:
+      - name: Checkout the source code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+          cache: gradle # caches ~/.gradle/caches + wrapper between runs — faster repeat builds
+
+      - name: Install Android SDK Platform 37
+        run: echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-37.0"
+
+      # --- HuggingFace OAuth secrets injection ---
+      # ProjectConfig.kt and build.gradle.kts ship with literal "REPLACE_WITH_..." placeholders
+      # (see DEVELOPMENT.md) — committing your real clientId/redirectUri to the repo is exactly
+      # what you don't want in a public/shared fork. Instead, store them as GitHub Secrets
+      # (Settings > Secrets and variables > Actions) and this step patches the placeholders in the
+      # CI checkout only — nothing gets written back to the repo.
+      #
+      # Required secrets:
+      #   HF_CLIENT_ID        - from your Hugging Face OAuth app
+      #   HF_REDIRECT_URI     - e.g. https://your.redirect/uri  (full URI, used in ProjectConfig.kt)
+      #   HF_REDIRECT_SCHEME  - just the scheme part of the same redirect, e.g. "your-scheme"
+      #                         (used in build.gradle.kts's manifestPlaceholders)
+      - name: Inject HuggingFace OAuth config
+        env:
+          HF_CLIENT_ID: ${{ secrets.HF_CLIENT_ID }}
+          HF_REDIRECT_URI: ${{ secrets.HF_REDIRECT_URI }}
+          HF_REDIRECT_SCHEME: ${{ secrets.HF_REDIRECT_SCHEME }}
+        run: |
+          if [ -z "$HF_CLIENT_ID" ] || [ -z "$HF_REDIRECT_URI" ] || [ -z "$HF_REDIRECT_SCHEME" ]; then
+            echo "::warning::HF_CLIENT_ID / HF_REDIRECT_URI / HF_REDIRECT_SCHEME secrets are not " \
+                 "all set. Building with the placeholder values from the repo — the APK will " \
+                 "compile fine, but HuggingFace sign-in (and therefore model downloads) will NOT " \
+                 "work on-device until these secrets are configured in the repo settings."
+          else
+            sed -i "s|REPLACE_WITH_YOUR_CLIENT_ID_IN_HUGGINGFACE_APP|$HF_CLIENT_ID|" \
+              app/src/main/java/com/google/ai/edge/gallery/common/ProjectConfig.kt
+            sed -i "s|REPLACE_WITH_YOUR_REDIRECT_URI_IN_HUGGINGFACE_APP|$HF_REDIRECT_URI|" \
+              app/src/main/java/com/google/ai/edge/gallery/common/ProjectConfig.kt
+            sed -i "s|REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP|$HF_REDIRECT_SCHEME|" \
+              app/build.gradle.kts
+            echo "HuggingFace OAuth config injected from secrets."
+          fi
+
+      # assembleDebug, not assembleRelease: debug builds are auto-signed with Gradle's built-in
+      # debug keystore, so the APK this produces installs directly on a device/emulator with no
+      # extra signing step. assembleRelease needs its own signing config (a real keystore) or the
+      # output APK won't install at all — worth doing later once you're ready to actually
+      # distribute this, not for day-to-day test builds.
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: Android/src/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
