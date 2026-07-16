@@ -40,10 +40,19 @@ class MsgType(str, Enum):
     PROMPT = "PROMPT"           # coordinator/stage -> stage: prompt/activation text
     PROMPT_TOKEN = "PROMPT_TOKEN"   # last stage -> coordinator: output text chunk
     DONE = "DONE"               # last stage -> coordinator: generation finished
-    # -- inference: true layer-shard ring (Track B) ---------------------
+    # -- inference: true layer-shard ring (Track B / llama sharding) ----
     ACTIVATION = "ACTIVATION"   # stage i -> i+1: hidden-state blob
     FEED = "FEED"               # last -> first: sampled token id (closes the ring)
     SHARD_TOKEN = "SHARD_TOKEN"  # last stage -> coordinator: sampled token id
+    # -- agent coordination (Pointer / Track A / edge) ------------------
+    AGENT_ANNOUNCE = "AGENT_ANNOUNCE"  # agent -> all: capability card
+    STATUS = "STATUS"           # agent -> coordinator: free/busy + load
+    TASK = "TASK"               # coordinator -> agent: a task/subtask
+    PARTIAL = "PARTIAL"         # agent -> coordinator: streamed partial output
+    RESULT = "RESULT"           # agent -> coordinator: final output for a task
+    VOTE = "VOTE"               # agent -> coordinator: candidate + score (voting mode)
+    DECIDE = "DECIDE"           # coordinator -> all: final decision/aggregate
+    CONTEXT_SYNC = "CONTEXT_SYNC"  # any -> group: append-only context delta
 
 
 _TYPES = {t.value for t in MsgType}

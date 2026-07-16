@@ -12,7 +12,22 @@ python -m helix.transport.selftest   # L1 transport     → ALL PASSED
 python -m helix.control_selftest     # L3 control plane → ALL PASSED
 python -m helix.pipeline_selftest     # L4 data plane   → ALL PASSED
 python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED
+python -m helix.agent.selftest        # Track A agents  → ALL PASSED
 ```
+
+## Two tracks on one substrate
+
+HELIX L1–L2 (transport + security) is the shared substrate. On top of it run **two
+interchangeable tracks** — this is what makes it a universal protocol for both llama-style
+sharding and edge multi-agent:
+
+| Track | What crosses the wire | Layers |
+|---|---|---|
+| **B — llama sharding** | hidden-state tensors (one model split across devices) | L3 leases (`control.py`) → L4 ring (`pipeline.py`) → L5 sessions (`orchestrator.py`) |
+| **A — edge agents (Pointer)** | tasks & results (whole model per device = one agent) | `agent/` — registry + coordinator modes |
+
+Both reuse the same authenticated/encrypted/replay-safe frames, discovery, membership,
+liveness and self-healing.
 
 ## What it is
 
@@ -56,6 +71,15 @@ python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED
 | Module | Responsibility |
 |---|---|
 | `orchestrator.py` | `Orchestrator` — node-level conductor: keeps the L3 control node alive, (re)builds its L4 pipeline on every lease, and (as coordinator) drives a `Session` — seeds the ring, streams tokens, decides termination. On a lost node it **re-places over survivors and resumes from the last produced token** (HELIX ② healing). `Session` streams `(step, token, text)` and ends with an explicit `SessionStatus` (COMPLETED / TIMEOUT / FAILED), closing the AUDIT #5 silent-truncation gap. |
+
+**Track A — edge agent coordination (Pointer)**
+
+| Module | Responsibility |
+|---|---|
+| `agent/card.py` | `AgentCard` — capability advertisement (local analogue of an A2A Agent Card), carried in `AGENT_ANNOUNCE`. |
+| `agent/runner.py` | `AgentRunner` contract (a whole LiteRT model = one agent) + `EchoAgentRunner` reference. |
+| `agent/registry.py` | `AgentRegistry` — capabilities + free/busy status + liveness; matches a task to a capable agent. |
+| `agent/node.py` | `AgentNode` — worker (runs its model on `TASK`, streams `PARTIAL`→`RESULT`/`VOTE`) + coordinator with four modes (**single / parallel / voting / pipeline**) and **re-route healing** (a lost agent's task is idempotently re-assigned). Votes are one-per-authenticated-node (Sybil note in `../POINTER_protocol.md`). |
 
 ## How it answers the audit
 
