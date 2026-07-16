@@ -51,6 +51,19 @@
     <uses-feature android:name="android.hardware.camera.flash"
         android:required="false" />
 
+    <!--
+      Package-visibility (Android 11+/minSdk 31 here): without this, queryIntentActivities()
+      in InstalledAppPickerBottomSheet.kt (Universal Agent's app-scope picker) would only ever
+      see this app itself, not other installed launchable apps. Holding BIND_ACCESSIBILITY_SERVICE
+      does not grant broader package-query visibility — separate permission systems.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name="${applicationName}"
         android:allowBackup="true"

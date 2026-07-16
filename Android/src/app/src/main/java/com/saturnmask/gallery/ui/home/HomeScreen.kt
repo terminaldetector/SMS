@@ -730,6 +730,8 @@ private fun TaskList(
       modifier = Modifier.padding(top = 22.dp),
     )
 
+    UniversalAgentHomeCard(modifier = Modifier.padding(top = 22.dp))
+
     Column(
       verticalArrangement = Arrangement.spacedBy(10.dp),
       modifier =

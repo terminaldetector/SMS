@@ -116,6 +116,7 @@ import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentActionPer
 import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentDisclaimerDialog
 import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentTools
 import com.saturnmask.gallery.customtasks.universalagent.isUniversalAgentAccessibilityServiceEnabled
+import com.saturnmask.gallery.customtasks.universalagent.universalAgentEnablementStateFrom
 import com.saturnmask.gallery.ui.common.chat.ChatMessageWebView
 import com.saturnmask.gallery.ui.common.chat.ChatSide
 import com.saturnmask.gallery.ui.common.chat.LogMessage
@@ -273,9 +274,12 @@ fun AgentChatScreen(
     curSystemPrompt = getEffectiveBaseSystemPrompt(uiSystemPrompt, mcpToolsCount > 0)
   }
 
-  // Session-scoped only (resets to false on fresh entry), same as mobileActionsEnabled — never
-  // silently stays "on" forever across app restarts.
-  var universalAgentRequested by rememberSaveable { mutableStateOf(false) }
+  // Shared with the Home screen's UniversalAgentHomeCard via an in-memory singleton (not
+  // SharedPreferences) — never silently stays "on" forever across app restarts, same intent as
+  // the rememberSaveable var this replaced, just reachable from more than one screen now. See
+  // UniversalAgentEnablementState's doc comment.
+  val universalAgentEnablementState = remember { universalAgentEnablementStateFrom(context) }
+  val universalAgentRequested by universalAgentEnablementState.requested.collectAsState()
   // The ONLY way to detect AccessibilityService enablement — there's no programmatic request API,
   // the user must manually toggle it on in Settings > Accessibility (see the disclaimer dialog's
   // onConfirm below). Re-checked on ON_RESUME so coming back from Settings updates this live.
@@ -596,7 +600,7 @@ fun AgentChatScreen(
         // UniversalAgentDisclaimerDialog's onConfirm below, which sets universalAgentRequested.
         showUniversalAgentDisclaimer = true
       } else {
-        universalAgentRequested = false
+        universalAgentEnablementState.requested.value = false
         resetSessionWithCurrentSkillsAndMcps(
           viewModel,
           modelManagerViewModel,
@@ -1088,7 +1092,7 @@ fun AgentChatScreen(
       onDismiss = { showUniversalAgentDisclaimer = false },
       onConfirm = {
         showUniversalAgentDisclaimer = false
-        universalAgentRequested = true
+        universalAgentEnablementState.requested.value = true
         if (!universalAgentServiceEnabled) {
           context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }

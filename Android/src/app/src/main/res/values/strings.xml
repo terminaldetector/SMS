@@ -347,6 +347,18 @@
   <string name="universal_agent_disclaimer_dialog_content" translatable="true">Universal Agent lets the on-device AI assistant see what\'s on screen and tap, swipe, or type into any app, not just this one. You\'ll be asked to enable an Accessibility Service in system Settings, and every action still asks for your confirmation before it runs.</string>
   <string name="universal_agent_action_permission_title" translatable="true">Allow this action?</string>
   <string name="universal_agent_action_allow" translatable="true">Allow</string>
+  <string name="universal_agent_choose_app_title" translatable="true">Choose an app</string>
+  <string name="universal_agent_choose_app_empty" translatable="true">No apps found.</string>
+  <string name="universal_agent_home_card_title" translatable="true">Universal Agent</string>
+  <string name="universal_agent_home_card_status_off" translatable="true">Off</string>
+  <string name="universal_agent_home_card_status_full_device" translatable="true">On — full device</string>
+  <string name="universal_agent_home_card_status_scoped" translatable="true">On — scoped to %1$s</string>
+  <string name="universal_agent_home_card_status_enable_in_settings" translatable="true">Enable in Settings › Accessibility</string>
+  <string name="universal_agent_home_card_scope_row_label" translatable="true">Scoped app</string>
+  <string name="universal_agent_home_card_scope_none" translatable="true">None — acts across the whole device</string>
+  <string name="universal_agent_home_card_change" translatable="true">Change</string>
+  <string name="universal_agent_home_card_clear" translatable="true">Clear</string>
+  <string name="universal_agent_home_card_explanation" translatable="true">When scoped, Universal Agent can only see and act inside the chosen app — everywhere else it can\'t act at all, except skipping tracks in whatever music app is playing.</string>
   <string name="universal_agent_action_dont_allow" translatable="true">Don\'t allow</string>
 
   <string name="add_mcp_server" translatable="true">Add MCP server</string>

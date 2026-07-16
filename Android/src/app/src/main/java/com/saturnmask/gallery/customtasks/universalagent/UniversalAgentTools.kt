@@ -21,7 +21,10 @@ import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
+import android.media.AudioManager
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
 import com.saturnmask.gallery.common.AgentAction
@@ -122,6 +125,23 @@ interface UniversalAgentTools : ToolSet {
     @ToolParam(description = "Android package name, e.g. com.whatsapp.") packageName: String
   ): Map<String, String>
 
+  // Deliberately NOT app-scope-restricted (see UniversalAgentToolsImpl.scopeViolationOrNull's doc)
+  // — the one carve-out that stays available outside the scoped app, per the roadmap's "at most
+  // change tracks in music apps" isolation boundary.
+  @Tool(
+    description =
+      "Skips to the next track in whatever music/media app is currently playing. Works even " +
+        "outside the app Universal Agent is scoped to. Requires user confirmation."
+  )
+  fun skipToNextTrack(): Map<String, String>
+
+  @Tool(
+    description =
+      "Skips to the previous track in whatever music/media app is currently playing. Works even " +
+        "outside the app Universal Agent is scoped to. Requires user confirmation."
+  )
+  fun skipToPreviousTrack(): Map<String, String>
+
   fun sendAgentAction(action: AgentAction)
 }
 
@@ -137,6 +157,9 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   override lateinit var context: Context
 
   private val bridge: UniversalAgentServiceBridge by lazy { universalAgentServiceBridgeFrom(context) }
+  private val settingsStore: UniversalAgentSettingsStore by lazy {
+    universalAgentSettingsStoreFrom(context)
+  }
 
   // Re-resolved by descriptor match at act-time rather than holding onto raw AccessibilityNodeInfo
   // references across calls — see the plan's rationale: cross-API-level recycling risk (minSdk 31
@@ -145,6 +168,7 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   private var lastSnapshot: List<ScreenElement> = emptyList()
 
   override fun listScreenElements(): Map<String, String> {
+    scopeViolationOrNull()?.let { return it }
     val walkResult =
       bridge.withService { service ->
         val root = service.rootInActiveWindow ?: return@withService null
@@ -176,6 +200,7 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   }
 
   override fun tapElement(elementId: Int): Map<String, String> {
+    scopeViolationOrNull()?.let { return it }
     val descriptor =
       lastSnapshot.getOrNull(elementId)
         ?: return mapOf(
@@ -211,6 +236,7 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   }
 
   override fun swipeScreen(direction: String): Map<String, String> {
+    scopeViolationOrNull()?.let { return it }
     val dir =
       SwipeDirection.from(direction)
         ?: return mapOf(
@@ -230,6 +256,7 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   }
 
   override fun typeText(elementId: Int, text: String): Map<String, String> {
+    scopeViolationOrNull()?.let { return it }
     val descriptor =
       lastSnapshot.getOrNull(elementId)
         ?: return mapOf(
@@ -270,12 +297,14 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   }
 
   override fun goBack(): Map<String, String> {
+    scopeViolationOrNull()?.let { return it }
     if (!confirmAction("Go back")) return mapOf("error" to "Permission denied by user", "status" to "failed")
     val result = bridge.withService { it.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }
     return globalActionResultToMap(result, "Went back", "Failed to go back")
   }
 
   override fun goHome(): Map<String, String> {
+    scopeViolationOrNull()?.let { return it }
     if (!confirmAction("Go to home screen")) {
       return mapOf("error" to "Permission denied by user", "status" to "failed")
     }
@@ -284,6 +313,7 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
   }
 
   override fun openApp(packageName: String): Map<String, String> {
+    scopeViolationOrNull(targetPackageForOpenApp = packageName)?.let { return it }
     if (!confirmAction("Open app: $packageName")) {
       return mapOf("error" to "Permission denied by user", "status" to "failed")
     }
@@ -301,8 +331,80 @@ class UniversalAgentToolsImpl(private val sendAction: (AgentAction) -> Unit) : U
       .getOrElse { e -> mapOf("error" to (e.message ?: "Failed to open app"), "status" to "failed") }
   }
 
+  override fun skipToNextTrack(): Map<String, String> = dispatchMediaKey(
+    KeyEvent.KEYCODE_MEDIA_NEXT,
+    "Skip to next track",
+    "Skipped to next track",
+  )
+
+  override fun skipToPreviousTrack(): Map<String, String> = dispatchMediaKey(
+    KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+    "Skip to previous track",
+    "Skipped to previous track",
+  )
+
   override fun sendAgentAction(action: AgentAction) {
     sendAction(action)
+  }
+
+  /** Not scope-restricted — the always-available carve-out (see [scopeViolationOrNull]'s doc).
+   *  Dispatches a system media key event, which whatever app currently holds audio focus
+   *  responds to; no extra Android permission is required for this specific API. */
+  private fun dispatchMediaKey(keyCode: Int, confirmLabel: String, successMessage: String): Map<String, String> {
+    if (!confirmAction(confirmLabel)) {
+      return mapOf("error" to "Permission denied by user", "status" to "failed")
+    }
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val eventTime = SystemClock.uptimeMillis()
+    audioManager.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0))
+    audioManager.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0))
+    sendAction(SkillProgressAgentAction(label = successMessage, inProgress = false))
+    return mapOf("result" to successMessage, "status" to "succeeded")
+  }
+
+  /** Fresh (not event-cached) read of the frontmost app's package — deliberately NOT
+   *  [UniversalAgentAccessibilityService.lastKnownPackageName], which only updates on
+   *  TYPE_WINDOW_STATE_CHANGED events and could go stale exactly when it matters most (right after
+   *  the user switches away from the scoped app). Querying rootInActiveWindow directly, the same
+   *  way listScreenElements already does, means this check can never be fooled by event-delivery
+   *  timing. */
+  private fun currentForegroundPackage(): String? =
+    bridge.withService { it.rootInActiveWindow?.packageName?.toString() }.getOrNull()
+
+  /**
+   * Null (no scoped app configured) means unrestricted — today's full-device behavior, unchanged
+   * default. When a scope IS configured, every action/read below is confined to that one app;
+   * [openApp] gets one deliberate exception (see its own call site) since opening the scoped app
+   * is the only way back INTO the zone from outside it.
+   *
+   * This is the entire enforcement mechanism — deliberately NOT paired with any restriction on
+   * [android.accessibilityservice.AccessibilityServiceInfo.packageNames] (static XML or runtime
+   * `setServiceInfo`): narrowing the accessibility framework's own event/window visibility to only
+   * the scoped package would prevent this service from ever detecting that the user has LEFT that
+   * app, which is exactly the state this check needs to see in order to block anything. Read fresh
+   * from [UniversalAgentSettingsStore] every call (not cached) — changing the scope from the Home
+   * screen card takes effect on the very next tool call.
+   */
+  private fun scopeViolationOrNull(targetPackageForOpenApp: String? = null): Map<String, String>? {
+    val scoped = settingsStore.getScopedPackageName() ?: return null
+    if (targetPackageForOpenApp != null) {
+      return if (targetPackageForOpenApp == scoped) {
+        null
+      } else {
+        mapOf(
+          "error" to "Outside the allowed app — openApp is restricted to $scoped while scoped.",
+          "status" to "failed",
+        )
+      }
+    }
+    return if (currentForegroundPackage() == scoped) {
+      null
+    } else {
+      mapOf(
+        "error" to "Outside the allowed app ($scoped) — Universal Agent is scoped and can't act here.",
+        "status" to "failed",
+      )
+    }
   }
 
   /** Blocks (via CompletableDeferred.await) until the UI resolves the confirmation dialog. No
