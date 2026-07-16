@@ -9,6 +9,7 @@ only, so it loads under Chaquopy.
 ```bash
 python -m helix.selftest             # L2 protocol core → ALL PASSED
 python -m helix.transport.selftest   # L1 transport     → ALL PASSED
+python -m helix.control_selftest     # L3 control plane → ALL PASSED
 ```
 
 ## What it is
@@ -31,6 +32,14 @@ python -m helix.transport.selftest   # L1 transport     → ALL PASSED
 | `transport/memory.py` | `InMemoryTransport` — process-local, correct self-delivery. |
 | `transport/wifi.py` | `WifiTransport` — UDP-beacon discovery + length-prefixed TCP over any IP link (Wi-Fi Aware/Direct/LAN/USB-tether). Bounded reads, authenticated beacons, correct self-delivery. |
 | `endpoint.py` | `Endpoint` — the L1↔L2 seam: seals typed messages out, opens authenticated messages in. |
+
+**L3 — control plane (membership, placement, leases, liveness)**
+
+| Module | Responsibility |
+|---|---|
+| `placement.py` | Memory-weighted ring placement with a **per-node RAM-fit check** (closes AUDIT #8, which exo-core only checked on the ring total). |
+| `roster.py` | Membership + liveness from `ANNOUNCE`/`HEARTBEAT`; injectable clock; `prune()` returns the lost set. |
+| `control.py` | `ControlNode` — member (announce/heartbeat, accept `LEASE`, reply `LEASE_ACK`) and coordinator (`place()` → issue leases, collect acks). Layer **leases** (TTL + `term`) replace one-shot `ASSIGN`; `on_node_lost` is the self-healing hook. Coordinator identity is the authenticated `msg.src`. |
 
 ## How it answers the audit
 
