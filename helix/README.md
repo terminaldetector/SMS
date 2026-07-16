@@ -10,6 +10,7 @@ only, so it loads under Chaquopy.
 python -m helix.selftest             # L2 protocol core → ALL PASSED
 python -m helix.transport.selftest   # L1 transport     → ALL PASSED
 python -m helix.control_selftest     # L3 control plane → ALL PASSED
+python -m helix.pipeline_selftest     # L4 data plane   → ALL PASSED
 ```
 
 ## What it is
@@ -40,6 +41,14 @@ python -m helix.control_selftest     # L3 control plane → ALL PASSED
 | `placement.py` | Memory-weighted ring placement with a **per-node RAM-fit check** (closes AUDIT #8, which exo-core only checked on the ring total). |
 | `roster.py` | Membership + liveness from `ANNOUNCE`/`HEARTBEAT`; injectable clock; `prune()` returns the lost set. |
 | `control.py` | `ControlNode` — member (announce/heartbeat, accept `LEASE`, reply `LEASE_ACK`) and coordinator (`place()` → issue leases, collect acks). Layer **leases** (TTL + `term`) replace one-shot `ASSIGN`; `on_node_lost` is the self-healing hook. Coordinator identity is the authenticated `msg.src`. |
+
+**L4 — data plane (the inference ring)**
+
+| Module | Responsibility |
+|---|---|
+| `shard.py` | `ShardRunner` contract (what GGUF/llama.cpp-RPC or ONNX implements) + `NumericShardRunner` reference. Hidden state crosses as a numeric vector so it can be compressed. |
+| `activation.py` | `ActivationCodec`: `RawActivationCodec` (exact) / `Int8ActivationCodec` (per-tensor int8, ~7× smaller wire; the pure-Python half of HELIX ①). FEC plugs in behind the same interface. |
+| `pipeline.py` | `ShardPipeline` — drives one node's role in the layer-shard ring over an `Endpoint`. Monotonic per-task step guard (no double-advance) and step-indexed token assembly (no reorder truncation). Ring/band/coordinator come from the L3 lease. |
 
 ## How it answers the audit
 
