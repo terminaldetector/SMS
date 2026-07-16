@@ -85,10 +85,10 @@ async def _dup_case() -> None:
     resealed = FrameCodec("A", sealer_from_cluster_secret(SECRET)).seal(
         MsgType.ACTIVATION.value, {"step": 0, "act": codec.encode(hidden)}, tid="dup")
     epB._on_frame(resealed)
-    await pb._flush()
-    toks = pb._tokens  # B is last; it emits SHARD_TOKEN to coordinator "A", not to itself
-    # B processed step 0 exactly once -> exactly one outbound token was enqueued/flushed
+    await pb.flush()
+    # B (last stage) processed step 0 exactly once despite three delivery attempts.
     assert pb._last_step.get("dup") == 0
+    assert pa is not None  # A built for symmetry
     print("  idempotency: duplicate/replayed activation for a step processed once")
 
 

@@ -11,6 +11,7 @@ python -m helix.selftest             # L2 protocol core → ALL PASSED
 python -m helix.transport.selftest   # L1 transport     → ALL PASSED
 python -m helix.control_selftest     # L3 control plane → ALL PASSED
 python -m helix.pipeline_selftest     # L4 data plane   → ALL PASSED
+python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED
 ```
 
 ## What it is
@@ -48,7 +49,13 @@ python -m helix.pipeline_selftest     # L4 data plane   → ALL PASSED
 |---|---|
 | `shard.py` | `ShardRunner` contract (what GGUF/llama.cpp-RPC or ONNX implements) + `NumericShardRunner` reference. Hidden state crosses as a numeric vector so it can be compressed. |
 | `activation.py` | `ActivationCodec`: `RawActivationCodec` (exact) / `Int8ActivationCodec` (per-tensor int8, ~7× smaller wire; the pure-Python half of HELIX ①). FEC plugs in behind the same interface. |
-| `pipeline.py` | `ShardPipeline` — drives one node's role in the layer-shard ring over an `Endpoint`. Monotonic per-task step guard (no double-advance) and step-indexed token assembly (no reorder truncation). Ring/band/coordinator come from the L3 lease. |
+| `pipeline.py` | `ShardPipeline` — drives one node's role in the layer-shard ring over an `Endpoint`. **Coordinator-driven**: the last shard returns each token to the coordinator, which decides termination. Monotonic per-task step guard (no double-advance). Ring/band/coordinator come from the L3 lease. |
+
+**L5 — sessions & orchestration (self-healing generation)**
+
+| Module | Responsibility |
+|---|---|
+| `orchestrator.py` | `Orchestrator` — node-level conductor: keeps the L3 control node alive, (re)builds its L4 pipeline on every lease, and (as coordinator) drives a `Session` — seeds the ring, streams tokens, decides termination. On a lost node it **re-places over survivors and resumes from the last produced token** (HELIX ② healing). `Session` streams `(step, token, text)` and ends with an explicit `SessionStatus` (COMPLETED / TIMEOUT / FAILED), closing the AUDIT #5 silent-truncation gap. |
 
 ## How it answers the audit
 

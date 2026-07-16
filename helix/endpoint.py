@@ -31,6 +31,13 @@ class Endpoint:
     def on_message(self, handler: MessageHandler) -> None:
         self._handlers.append(handler)
 
+    def off_message(self, handler: MessageHandler) -> None:
+        """Deregister a handler (used when a pipeline is replaced on re-placement)."""
+        try:
+            self._handlers.remove(handler)
+        except ValueError:
+            pass
+
     def _on_frame(self, frame: bytes) -> None:
         msg = self._c.open(frame)
         if msg is None:

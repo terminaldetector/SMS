@@ -96,6 +96,7 @@ class ControlNode:
         self._outbox: List = []
         self._running = False
         self._on_node_lost: Optional[Callable[[str], None]] = None
+        self._on_lease: Optional[Callable[["Lease"], None]] = None
         endpoint.on_message(self._on_message)
 
     @property
@@ -104,6 +105,10 @@ class ControlNode:
 
     def on_node_lost(self, cb: Callable[[str], None]) -> None:
         self._on_node_lost = cb
+
+    def on_lease(self, cb: Callable[["Lease"], None]) -> None:
+        """Called when a fresh LEASE is accepted (member (re)configures its pipeline)."""
+        self._on_lease = cb
 
     # -- inbound (sync, from transport) ------------------------------------
     def _on_message(self, msg: Message) -> None:
@@ -135,6 +140,8 @@ class ControlNode:
         except (KeyError, ValueError, TypeError, IndexError):
             return  # malformed lease → drop
         self._term_seen = term
+        if self._on_lease is not None:
+            self._on_lease(self.lease)  # (re)build the pipeline BEFORE acking → ack implies ready
         self._enqueue(msg.src, MsgType.LEASE_ACK.value, {"term": term, "band": [band.start, band.end]})
         logger.info("%s leased [%d,%d) term %d from %s", self.node_id, band.start, band.end, term, msg.src)
 
