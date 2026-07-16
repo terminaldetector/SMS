@@ -7,10 +7,13 @@ GGUF layer-shard) and every later HELIX phase build on. Pure Python standard lib
 only, so it loads under Chaquopy.
 
 ```bash
-python -m helix.selftest      # → ALL PASSED
+python -m helix.selftest             # L2 protocol core → ALL PASSED
+python -m helix.transport.selftest   # L1 transport     → ALL PASSED
 ```
 
 ## What it is
+
+**L2 — protocol core (wire + security)**
 
 | Module | Responsibility |
 |---|---|
@@ -19,6 +22,15 @@ python -m helix.selftest      # → ALL PASSED
 | `frame.py` | Versioned wire envelope `magic·flags·epoch·nonce·sealed_body`; `MAX_FRAME` bound checked before allocation. |
 | `message.py` | Versioned messages with authenticated `src`, `seq`, disambiguated types (`PROMPT_TOKEN` vs `SHARD_TOKEN`). |
 | `session.py` | `FrameCodec` (seal/open) + `ReplayGuard` (per-sender sliding-window anti-replay). |
+
+**L1 — transport (move opaque frame bytes)**
+
+| Module | Responsibility |
+|---|---|
+| `transport/base.py` | `Transport` ABC. Inbound handler gets **only the frame** — identity is authenticated inside it, never resolved from the transport. |
+| `transport/memory.py` | `InMemoryTransport` — process-local, correct self-delivery. |
+| `transport/wifi.py` | `WifiTransport` — UDP-beacon discovery + length-prefixed TCP over any IP link (Wi-Fi Aware/Direct/LAN/USB-tether). Bounded reads, authenticated beacons, correct self-delivery. |
+| `endpoint.py` | `Endpoint` — the L1↔L2 seam: seals typed messages out, opens authenticated messages in. |
 
 ## How it answers the audit
 
