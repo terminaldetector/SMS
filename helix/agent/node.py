@@ -27,6 +27,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from helix.agent.card import AgentCard
+from helix.agent.context import ContentStore, ContextEntry, ContextLog
 from helix.agent.registry import AgentRegistry
 from helix.agent.runner import AgentRunner
 from helix.endpoint import Endpoint
@@ -69,6 +70,8 @@ class AgentNode:
         self._busy = False
         self._outbox: List[Tuple[str, str, dict, str]] = []
         self._coll: Dict[str, Dict[str, Any]] = {}  # tid -> {results, votes, partials}
+        self.context = ContextLog(self.node_id)     # shared conversation (CRDT)
+        self._blobs = ContentStore()                # content-addressed store
         self._running = False
         self._on_agent_lost: Optional[Callable[[str], None]] = None
         endpoint.on_message(self._on_message)
@@ -79,6 +82,36 @@ class AgentNode:
 
     def on_agent_lost(self, cb: Callable[[str], None]) -> None:
         self._on_agent_lost = cb
+
+    # -- shared context (CONTEXT_SYNC) -------------------------------------
+    def _resolve(self, e: ContextEntry) -> str:
+        if e.content is not None:
+            return e.content
+        c = self._blobs.get(e.ref) if e.ref else None
+        return c if c is not None else "<missing:{}>".format((e.ref or "")[:8])
+
+    def context_text(self) -> str:
+        return self.context.render(self._resolve)
+
+    async def share_blob(self, content: str) -> str:
+        """Broadcast a content-addressed blob once; return its ref for entries to cite."""
+        ref = self._blobs.put(content)
+        await self.ep.broadcast(MsgType.CONTEXT_BLOB.value, {"ref": ref, "content": content})
+        return ref
+
+    async def context_append(self, role: str, content: str, *, as_ref: bool = False) -> ContextEntry:
+        """Append a turn to the shared context and broadcast the delta.
+
+        ``as_ref=True`` shares the content as a blob once and cites it by hash — use for
+        large/repeated content (a document, a long system prompt) so it travels once.
+        """
+        if as_ref:
+            ref = await self.share_blob(content)
+            entry = self.context.append(role, ref=ref)
+        else:
+            entry = self.context.append(role, content=content)
+        await self.ep.broadcast(MsgType.CONTEXT_SYNC.value, entry.to_body())
+        return entry
 
     # -- inbound -----------------------------------------------------------
     def _on_message(self, msg: Message) -> None:
@@ -101,12 +134,30 @@ class AgentNode:
             c = self._coll.get(msg.tid)
             if c is not None:
                 c["votes"][msg.src] = (str(msg.body.get("candidate", "")), float(msg.body.get("score", 0.0)))
+        elif t == MsgType.CONTEXT_SYNC.value:
+            entry = ContextEntry.from_body(msg.body)
+            # Provenance: an entry's author must be the authenticated sender. This blocks
+            # injecting context "as" the user or another agent (Pointer threat model §6).
+            if entry is None or entry.author != msg.src:
+                return
+            if self.context.merge(entry) and entry.ref and not self._blobs.has(entry.ref):
+                self._enqueue(msg.src, MsgType.CONTEXT_PULL.value, {"ref": entry.ref}, "")
+        elif t == MsgType.CONTEXT_BLOB.value:
+            self._blobs.put_with_ref(str(msg.body.get("ref", "")), str(msg.body.get("content", "")))
+        elif t == MsgType.CONTEXT_PULL.value:
+            ref = str(msg.body.get("ref", ""))
+            content = self._blobs.get(ref)
+            if content is not None:
+                self._enqueue(msg.src, MsgType.CONTEXT_BLOB.value, {"ref": ref, "content": content}, "")
 
     def _handle_task(self, msg: Message) -> None:
         b = msg.body
         tid, coord = msg.tid, msg.src
         mode = str(b.get("mode", "single"))
-        prompt, context = str(b.get("prompt", "")), str(b.get("context", ""))
+        prompt = str(b.get("prompt", ""))
+        # An explicit task context wins; otherwise the agent runs with the shared
+        # conversation it has synced (provenance-labelled).
+        context = str(b.get("context", "")) or self.context_text()
         self._busy = True
         parts: List[str] = []
         for chunk in self.runner.infer(prompt, context):

@@ -13,6 +13,7 @@ python -m helix.control_selftest     # L3 control plane → ALL PASSED
 python -m helix.pipeline_selftest     # L4 data plane   → ALL PASSED
 python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED
 python -m helix.agent.selftest        # Track A agents  → ALL PASSED
+python -m helix.agent.context_selftest # CONTEXT_SYNC    → ALL PASSED
 ```
 
 ## Two tracks on one substrate
@@ -80,6 +81,7 @@ liveness and self-healing.
 | `agent/runner.py` | `AgentRunner` contract (a whole LiteRT model = one agent) + `EchoAgentRunner` reference. |
 | `agent/registry.py` | `AgentRegistry` — capabilities + free/busy status + liveness; matches a task to a capable agent. |
 | `agent/node.py` | `AgentNode` — worker (runs its model on `TASK`, streams `PARTIAL`→`RESULT`/`VOTE`) + coordinator with four modes (**single / parallel / voting / pipeline**) and **re-route healing** (a lost agent's task is idempotently re-assigned). Votes are one-per-authenticated-node (Sybil note in `../POINTER_protocol.md`). |
+| `agent/context.py` | `ContextLog` — shared conversation as an **op-based CRDT** (Lamport-ordered append-only set) synced by `CONTEXT_SYNC` **deltas**. Entry `author` must equal the authenticated frame `src` (**provenance** — blocks context prompt-injection). Large/repeated content is **content-addressed** (`CONTEXT_BLOB` travels once, cited by SHA-256 ref; missing refs pulled via `CONTEXT_PULL`). |
 
 ## How it answers the audit
 

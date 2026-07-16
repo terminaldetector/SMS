@@ -52,7 +52,9 @@ class MsgType(str, Enum):
     RESULT = "RESULT"           # agent -> coordinator: final output for a task
     VOTE = "VOTE"               # agent -> coordinator: candidate + score (voting mode)
     DECIDE = "DECIDE"           # coordinator -> all: final decision/aggregate
-    CONTEXT_SYNC = "CONTEXT_SYNC"  # any -> group: append-only context delta
+    CONTEXT_SYNC = "CONTEXT_SYNC"  # any -> group: append-only context delta (one entry)
+    CONTEXT_BLOB = "CONTEXT_BLOB"  # any -> group/peer: content-addressed blob (ref + content)
+    CONTEXT_PULL = "CONTEXT_PULL"  # peer -> owner: request a blob by ref
 
 
 _TYPES = {t.value for t in MsgType}
