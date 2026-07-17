@@ -4,6 +4,9 @@
 (`helix/`, 11 selftest); интеграция = **реализовать три контракта под хост** и сверить с
 `helix/spec/vectors.json`. Никакой логики протокола переписывать не нужно.
 
+> Глубокая детализация (llama.cpp RPC команды/обе опции, Transport на Wi-Fi Aware/NSD/USB,
+> пошаговый тест на 2 устройствах) — в [`INTEGRATION_DETAIL.md`](INTEGRATION_DETAIL.md).
+
 ---
 
 ## 0. TL;DR — что реально строить
