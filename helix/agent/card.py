@@ -20,6 +20,7 @@ class AgentCard:
     mem_bytes: int = 0
     tokens_per_s: float = 0.0
     battery: float = 1.0
+    extensions: List[str] = field(default_factory=list)  # optional HELIX-extension tags
 
     def satisfies(self, *, task_type: Optional[str] = None, skill: Optional[str] = None,
                   model: Optional[str] = None) -> bool:
@@ -32,11 +33,14 @@ class AgentCard:
         return True
 
     def to_body(self) -> Dict[str, Any]:
-        return {
+        body = {
             "agent_id": self.agent_id, "models": self.models, "skills": self.skills,
             "task_types": self.task_types, "mem": self.mem_bytes,
             "tps": self.tokens_per_s, "batt": self.battery,
         }
+        if self.extensions:  # omitted when empty -> existing wire/conformance unchanged
+            body["ext"] = self.extensions
+        return body
 
     @staticmethod
     def from_body(src: str, body: Dict[str, Any]) -> "AgentCard":
@@ -48,4 +52,5 @@ class AgentCard:
             mem_bytes=int(body.get("mem", 0)),
             tokens_per_s=float(body.get("tps", 0.0)),
             battery=float(body.get("batt", 1.0)),
+            extensions=list(body.get("ext", [])),
         )

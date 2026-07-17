@@ -30,13 +30,22 @@ Dispatch = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 _INFER_KEYS = ("skill", "task_type", "agent_ids", "n", "prefer", "context", "timeout_s")
 
 
-def agent_dispatch(node: AgentNode) -> Dispatch:
-    """Build a command dispatcher bound to a coordinator :class:`AgentNode`."""
+def agent_dispatch(node: AgentNode, *, superagent: Any = None) -> Dispatch:
+    """Build a command dispatcher bound to a coordinator :class:`AgentNode`.
+
+    If ``superagent`` is provided, the ``super`` command runs one prompt across Track A + Track B
+    (the experimental unified mode).
+    """
 
     async def dispatch(req: Dict[str, Any]) -> Dict[str, Any]:
         cmd = req.get("cmd")
         if cmd == "ping":
             return {"ok": True, "pong": True}
+        if cmd == "super":
+            if superagent is None:
+                return {"ok": False, "error": "superagent not configured"}
+            res = await superagent.run(str(req.get("prompt", "")), req.get("strategy"))
+            return {"ok": True, "result": res.text, "strategy": res.strategy, "status": res.status}
         if cmd == "status":
             return {"ok": True, "node_id": node.node_id, "agents": len(node.registry.live())}
         if cmd == "nodes":
@@ -120,7 +129,16 @@ def _selftest() -> None:
         for n in (coord, up):
             await n.start()
         loops = [asyncio.ensure_future(n.run_forever()) for n in (coord, up)]
-        server = ControlServer(agent_dispatch(coord))
+        # unified mode: Track A = the real coordinator, Track B = a stand-in big model
+        from helix.super.config import MeshConfig
+        from helix.super.superagent import AgentNodeTrackA, CallableTrackB, SuperAgent
+
+        async def big_model(prompt):
+            return "BIG(" + prompt + ")"
+
+        superagent = SuperAgent(CallableTrackB(big_model), AgentNodeTrackA(coord, skill="chat"),
+                                MeshConfig())
+        server = ControlServer(agent_dispatch(coord, superagent=superagent))
         await server.start()
         r, w = await asyncio.open_connection("127.0.0.1", server.port)
 
@@ -135,9 +153,11 @@ def _selftest() -> None:
             assert "up" in nodes["agents"], nodes
             res = await call({"cmd": "infer", "prompt": "hello", "mode": "single", "skill": "chat"})
             assert res["ok"] and res["result"] == "HELLO", res
+            sup = await call({"cmd": "super", "prompt": "hello", "strategy": "ensemble"})
+            assert sup["ok"] and "BIG(hello)" in sup["result"] and "HELLO" in sup["result"], sup
             bad = await call({"cmd": "nope"})
             assert bad["ok"] is False
-            print("  control: ping/nodes/infer('single')->'HELLO' over JSON-lines; bad cmd handled")
+            print("  control: ping/nodes/infer/super over JSON-lines; bad cmd handled")
             print("ALL PASSED")
         finally:
             w.close()

@@ -139,7 +139,17 @@ multi-hop. **Только Track A/control**, не тяжёлые активац�
 ## 2bis. PowerShell-интерфейс на PC
 PC гоняет Python-стек + `helix/host/control_server.py` (JSON-lines на `127.0.0.1`); модуль
 `integration/powershell/Helix.psm1` даёт cmdlet'ы `Connect-Helix`, `Get-HelixNodes`,
-`Invoke-HelixInfer -Prompt -Mode -Skill`, `Add-HelixContext`.
+`Invoke-HelixInfer -Prompt -Mode -Skill`, `Invoke-HelixSuper -Prompt -Strategy`, `Add-HelixContext`.
+
+## 2ter. SuperAgent — единый режим (экспериментальный)
+Один промт на **обе** ветки сразу (`helix/super/`): планировщик мощностей
+(`scheduler.plan_allocation`) делит устройства на **Track B ring** (сильные/холодные/на-зарядке,
+по доказанной ёмкости) и **Track A agents**; `SuperAgent.run(prompt, strategy)` объединяет:
+- **hierarchical** — мелкие агенты дают вклад → augmented-промт → большая Track-B модель (лид+воркеры);
+- **ensemble** — обе ветки параллельно → слияние/кросс-проверка/голос.
+Soft-миграция (`should_migrate`: перегрев/разряд) переиспользует healing. Параметры — `MeshConfig`.
+Сценарий 3+3: 3 устройства в Track B ring (мономеш) + 3 в Track A (поинтер) → один суперагент.
+Через PowerShell: `Invoke-HelixSuper -Prompt "..." -Strategy ensemble`.
 
 ### 2.5 Разрешения (Android)
 `NEARBY_WIFI_DEVICES` (API 33+, `neverForLocation`) или `ACCESS_FINE_LOCATION` (старее),

@@ -20,6 +20,7 @@ python -m helix.agent.context_selftest # CONTEXT_SYNC    → ALL PASSED
 python -m helix.identity_selftest     # ④ per-node id   → ALL PASSED
 python -m helix.agent.secure_selftest # ④ signed votes  → ALL PASSED
 python -m helix.attest_selftest       # ③ attestation   → ALL PASSED
+python -m helix.super.selftest        # superagent mode → ALL PASSED
 python -m helix.conformance --check   # wire vectors    → matches vectors.json
 ```
 

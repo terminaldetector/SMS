@@ -68,10 +68,21 @@ function Invoke-HelixInfer {
     return $r.result
 }
 
+function Invoke-HelixSuper {
+    # Unified mode: one prompt across Track A (agents) + Track B (sharded model).
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [ValidateSet("hierarchical", "ensemble")][string]$Strategy = "hierarchical"
+    )
+    $r = Invoke-HelixCommand -Request @{ cmd = "super"; prompt = $Prompt; strategy = $Strategy }
+    if (-not $r.ok) { throw $r.error }
+    return $r.result
+}
+
 function Disconnect-Helix {
     if ($script:HelixClient) { $script:HelixClient.Close() }
     $script:HelixClient = $null
 }
 
 Export-ModuleMember -Function Connect-Helix, Disconnect-Helix, Test-HelixPing,
-    Get-HelixNodes, Get-HelixStatus, Add-HelixContext, Invoke-HelixInfer
+    Get-HelixNodes, Get-HelixStatus, Add-HelixContext, Invoke-HelixInfer, Invoke-HelixSuper
