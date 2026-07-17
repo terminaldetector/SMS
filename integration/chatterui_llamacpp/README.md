@@ -11,7 +11,7 @@ naturally in RN, so on the ChatterUI side HELIX is **native/TS**.
 |---|---|---|---|
 | **1. Client** | UI over a HELIX node | 🟢 low | a TS TCP client to `helix/host/control_server.py` (JSON-lines). No protocol port. **Proven end-to-end** — `js/control_smoke.mjs` drives the real mesh, 11/11; RN client in `control_client.ts`. |
 | **2. Agent** | its model = a **Track A** mesh agent | 🟡 med | **Proven end-to-end** — a JS HELIX agent (`js/agent_node.mjs`) joins the real Python coordinator and serves single/parallel/voting/pipeline (`js/agent_smoke.mjs`). To ship: wrap llama.rn `completion` as the `AgentRunner` (`makeLlamaAgentRunner`) + RN TCP transport. |
-| **3. Sharding** | contributes layers to a **Track B** big model | 🔴 high | **native cui-llama.rn changes**: llama.cpp RPC (`GGML_RPC`) or a `ShardRunner` over ggml. |
+| **3. Sharding** | contributes layers to a **Track B** big model | 🔴 high | **native cui-llama.rn changes**: llama.cpp RPC (`GGML_RPC`) or a `ShardRunner` over ggml. **Control plane proven** — `js/rpc_smoke.mjs` gets a real `--rpc`/`--tensor-split` plan from HELIX; native RPC build is the remaining work. See `LEVEL3_sharding.md`. |
 
 **Key point:** the *easiest and most valuable* ChatterUI integration is **Level 2 — its whole
 GGUF model as a Track A agent** (a mesh of ChatterUI phones = a Pointer mesh of GGUF models),
@@ -25,10 +25,14 @@ layer bands or RPC.
   `SecurityBridge`, and the conformance gate.
 - `control_client.ts` — **Level 1**, the RN client (`react-native-tcp-socket`) implementing
   `HelixControlClient` (JSON-lines: ping/status/nodes/context/infer/super). Transport-agnostic.
+- `LEVEL3_sharding.md` — **Level 3** native design: Option A (llama.cpp RPC, HELIX control plane)
+  recommended first, Option B (full HELIX ring, USB/BLE, resume) as end-state; exact cui-llama.rn
+  seams, caveats, bring-up.
 - `js/` — **the bring-up gates, all green.** Level 1: `control_client.mjs` + `control_smoke.mjs`
   drive the real Python mesh (11/11). Level 2: `frame_codec.mjs` + `agent_node.mjs` +
   `agent_smoke.mjs` run a JS agent that joins the real coordinator and serves all four modes;
-  `helix_codec.mjs` + `conformance.mjs` pin the wire vs `vectors.json` (16/16). See `js/README.md`.
+  `helix_codec.mjs` + `conformance.mjs` pin the wire vs `vectors.json` (16/16). Level 3:
+  `rpc_smoke.mjs` gets a real llama.cpp RPC plan from HELIX (7/7). See `js/README.md`.
 - `js/` — **the wire-compat gate, green.** A JS reference codec (`helix_codec.mjs`) + harness
   (`conformance.mjs`) that reproduces `helix/spec/vectors.json` byte-for-byte in plain Node
   `crypto` — the riskiest part of Level 2 (HELIX in JS/TS), now demonstrated. See `js/README.md`.
@@ -49,7 +53,10 @@ JSI/TurboModule: ChaCha20-Poly1305 + Ed25519 + HKDF). Alternatively a **shared R
   (`js/agent_smoke.mjs`); the wire is pinned to `vectors.json` (16/16). Remaining to ship in
   ChatterUI: wrap llama.rn `completion` as the `AgentRunner` and swap `node:net` for
   `react-native-tcp-socket` (crypto via a native `SecurityBridge` on-device). The protocol is done.
-- **Level 3 — design only:** requires native cui-llama.rn RPC/ShardRunner.
+- **Level 3 — control plane proven, native pending:** HELIX places a model by (attested) memory
+  and returns the llama.cpp `--rpc`/`--tensor-split` topology (`js/rpc_smoke.mjs`, 7/7). The
+  remaining work is the native cui-llama.rn `GGML_RPC` build + `startRpcServer`/`--rpc` methods
+  (Option A), then optionally a ggml `ShardRunner` (Option B). See `LEVEL3_sharding.md`.
 
 ## Licensing
 ChatterUI is **AGPL-3.0**. Integrating HELIX makes the combined app AGPL — confirm this is
@@ -61,4 +68,6 @@ acceptable before shipping.
 2. Level 1: TS control client → `infer`/`super` against a running HELIX node.
 3. Level 2: `makeLlamaAgentRunner` + TS agent worker → ChatterUI joins as an agent; 2-phone
    Track A test (single/parallel/voting/pipeline).
-4. Level 3 (optional): llama.cpp RPC in cui-llama.rn → Track B sharding.
+4. Level 3: control plane is done (`rpcPlan()` → `--rpc`/`--tensor-split`); build cui-llama.rn with
+   `GGML_RPC`, add `startRpcServer`/`--rpc` init, then a 2-phone shard test. Full detail in
+   `LEVEL3_sharding.md`.

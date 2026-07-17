@@ -1,6 +1,6 @@
 # HELIX JS — the ChatterUI bring-up gates (green)
 
-Three proofs, all runnable in plain Node, all green:
+Four proofs, all runnable in plain Node, all green:
 
 - **Level 1 (client) — proven end-to-end.** `control_client.mjs` + `control_smoke.mjs` drive the
   **real** Python HELIX mesh over TCP (spawns `helix/host/control_demo.py`): ping / status /
@@ -12,12 +12,19 @@ Three proofs, all runnable in plain Node, all green:
   (announce → TASK → PARTIAL stream → RESULT/VOTE). → `ALL PASSED — served 5 tasks`.
 - **Level 2 wire gate.** `helix_codec.mjs` + `conformance.mjs` reproduce the HELIX wire
   byte-for-byte vs `vectors.json` (the crypto/framing anchor the agent builds on).
+- **Level 3 (sharding control plane) — proven end-to-end.** `rpc_smoke.mjs` asks the real Python
+  coordinator (`helix/host/rpc_plan_demo.py`) to place a big model and returns the llama.cpp RPC
+  topology (`ring` / `--rpc` / `--tensor-split` / `main`). → `ALL PASSED (7 checks)`. The tensor
+  math + RPC transport are llama.cpp's (native); HELIX supplies discovery/placement/topology.
 
 ## Files
-- **Level 1:** `control_client.mjs` (JSON-lines client) · `control_smoke.mjs` (drives the mesh).
+- **Level 1:** `control_client.mjs` (JSON-lines client, incl. `rpcPlan`) · `control_smoke.mjs`
+  (drives the mesh).
 - **Level 2:** `helix_codec.mjs` (wire codec) · `frame_codec.mjs` (`FrameCodec` seal/open + seq +
   replay, stream framing) · `agent_node.mjs` (announce + TASK worker) · `agent_smoke.mjs`
   (end-to-end vs the real coordinator) · `conformance.mjs` (vectors gate).
+- **Level 3:** `rpc_smoke.mjs` (gets a real llama.cpp RPC plan from HELIX). Native side in
+  `../LEVEL3_sharding.md`.
 
 ---
 
@@ -49,6 +56,10 @@ node integration/chatterui_llamacpp/js/agent_smoke.mjs
 # Level 2 wire gate — codec reproduces the vectors:
 node integration/chatterui_llamacpp/js/conformance.mjs
 # -> ALL PASSED (16 checks) — JS codec is wire-compatible with the Python reference.
+
+# Level 3 — JS gets a real llama.cpp RPC plan from HELIX (spawns the Python coordinator):
+node integration/chatterui_llamacpp/js/rpc_smoke.mjs
+# -> ALL PASSED (7 checks) — JS drives the real HELIX Level 3 control plane (Option A).
 ```
 
 ## What this de-risks

@@ -92,6 +92,16 @@ export class HelixControlClient {
     return r; // {ok, result, strategy, status}
   }
 
+  // Track B / Option A: ask HELIX to place a model and return the llama.cpp RPC cluster topology.
+  // model: {model_id, n_layers, model_bytes[, order]}. Returns
+  // {ring, endpoints:[{node,addr,band,role}], main, rpc_arg, tensor_split}. A native cui-llama.rn
+  // driver then runs the `main` node with `--rpc <rpc_arg>` / `--tensor-split`.
+  async rpcPlan(model) {
+    const r = await this.request({ cmd: "rpc_plan", ...model });
+    if (!r.ok) throw new Error(r.error || "rpc_plan failed");
+    return r;
+  }
+
   close() {
     if (this._sock) {
       this._sock.end();

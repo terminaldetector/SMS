@@ -26,6 +26,8 @@ export interface HelixControlClient {
   infer(prompt: string, mode?: string, skill?: string): Promise<string>;
   super(prompt: string, strategy?: "hierarchical" | "ensemble"): Promise<string>;
   nodes(): Promise<string[]>;
+  // Level 3 / Option A: ask HELIX to place a model and return the llama.cpp RPC topology to drive.
+  rpcPlan?(model: { model_id: string; n_layers: number; model_bytes: number }): Promise<RpcClusterPlan>;
 }
 
 // =====================================================================================
@@ -80,12 +82,22 @@ export function makeLlamaAgentRunner(ctx: any, card: AgentCard): AgentRunner {
 
 // =====================================================================================
 // LEVEL 3 — SHARDING (Track B): ChatterUI contributes layers. NATIVE cui-llama.rn work.
+// See LEVEL3_sharding.md. Option A recommended first.
 // =====================================================================================
-// Option A (fast): llama.cpp's own RPC splits layers; HELIX is only control plane (discovery/
-// placement/identity/attestation/health) and hands llama.cpp the ring's host:port list.
+// Option A (recommended): llama.cpp's own RPC splits layers; HELIX is the control plane
+// (discovery/placement/identity/attestation/health) and hands llama.cpp the topology. The plan
+// comes from HelixControlClient.rpcPlan() (helix/rpc_cluster.py, proven by js/rpc_smoke.mjs):
+export interface RpcClusterPlan {
+  ring: string[];
+  endpoints: { node: string; addr: string; band: [number, number]; role: "main" | "worker" }[];
+  main: string;          // the driver node
+  rpc_arg: string;       // "h1:p1,h2:p2"  -> llama.cpp --rpc (the workers)
+  tensor_split: number[]; // -> llama.cpp --tensor-split, spans [main-local, worker0, ...]
+}
 export interface LlamaRpcCluster {
   startWorker(port: number): Promise<void>;                // wraps llama.cpp rpc-server (GGML_RPC build)
-  runMain(prompt: string, rpcEndpoints: string[]): AsyncIterable<string>; // --rpc a:p,b:p
+  // The main/driver phone runs its normal completion, distributed via the HELIX-planned topology:
+  runMain(prompt: string, plan: RpcClusterPlan): AsyncIterable<string>; // uses plan.rpc_arg + plan.tensor_split
 }
 // Option B (full HELIX ring): a fine-grained ShardRunner over a layer band (ggml hooks +
 // hidden-state I/O). Mirrors helix/shard.py. Activations then ride HELIX frames.

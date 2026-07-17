@@ -30,11 +30,17 @@ Dispatch = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
 _INFER_KEYS = ("skill", "task_type", "agent_ids", "n", "prefer", "context", "timeout_s")
 
 
-def agent_dispatch(node: AgentNode, *, superagent: Any = None) -> Dispatch:
-    """Build a command dispatcher bound to a coordinator :class:`AgentNode`.
+def agent_dispatch(node: Optional[AgentNode] = None, *, superagent: Any = None,
+                   control: Any = None) -> Dispatch:
+    """Build a command dispatcher.
 
-    If ``superagent`` is provided, the ``super`` command runs one prompt across Track A + Track B
-    (the experimental unified mode).
+    ``node`` (a coordinator :class:`AgentNode`) enables the Track-A commands
+    (``status``/``nodes``/``context``/``infer``). If ``superagent`` is provided, ``super`` runs one
+    prompt across Track A + Track B. If ``control`` (a :class:`~helix.control.ControlNode`) is
+    provided, ``rpc_plan`` returns a llama.cpp RPC cluster topology (Track B / Option A): HELIX
+    places the model by (attested) memory and hands back the ``--rpc``/``--tensor-split`` a native
+    cui-llama.rn driver needs. Any of the three may be omitted; the matching commands then report
+    they are not configured.
     """
 
     async def dispatch(req: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,6 +52,21 @@ def agent_dispatch(node: AgentNode, *, superagent: Any = None) -> Dispatch:
                 return {"ok": False, "error": "superagent not configured"}
             res = await superagent.run(str(req.get("prompt", "")), req.get("strategy"))
             return {"ok": True, "result": res.text, "strategy": res.strategy, "status": res.status}
+        if cmd == "rpc_plan":
+            if control is None:
+                return {"ok": False, "error": "control node not configured"}
+            from helix.rpc_cluster import plan_rpc_cluster
+            try:
+                plan = plan_rpc_cluster(
+                    control.roster.capacities(), control.rpc_addrs(),
+                    str(req.get("model_id", "")), int(req.get("n_layers", 0)),
+                    int(req.get("model_bytes", 0)), order=req.get("order"),
+                )
+            except Exception as exc:  # InsufficientCapacity / UnaddressableCluster
+                return {"ok": False, "error": str(exc)}
+            return {"ok": True, **plan.to_dict()}
+        if cmd in ("status", "nodes", "context", "infer") and node is None:
+            return {"ok": False, "error": "agent node not configured"}
         if cmd == "status":
             return {"ok": True, "node_id": node.node_id, "agents": len(node.registry.live())}
         if cmd == "nodes":

@@ -73,10 +73,18 @@ class ControlNode:
         ttl_s: float = 3.0,
         lease_ttl_s: float = 8.0,
         clock: Callable[[], float] = time.monotonic,
+        rpc_addr: str = "",
     ) -> None:
         self.ep = endpoint
         self.capacity = capacity
         self.clock = clock
+        # Option A (llama.cpp RPC): the "host:port" of this node's rpc-server, advertised in
+        # ANNOUNCE so the coordinator can build the --rpc list. Empty -> field omitted (wire
+        # unchanged for nodes that don't run an rpc-server).
+        self.rpc_addr = rpc_addr
+        self._rpc_addrs: Dict[str, str] = {}
+        if rpc_addr:
+            self._rpc_addrs[self.node_id] = rpc_addr
         self._announce_interval = announce_interval_s
         self._heartbeat_interval = heartbeat_interval_s
         self._lease_ttl_s = lease_ttl_s
@@ -114,6 +122,9 @@ class ControlNode:
     def _on_message(self, msg: Message) -> None:
         if msg.type == MsgType.ANNOUNCE.value:
             self.roster.observe(msg.src, _cap_from(msg.body))
+            addr = msg.body.get("rpc")
+            if addr:
+                self._rpc_addrs[msg.src] = str(addr)
         elif msg.type == MsgType.HEARTBEAT.value:
             self.roster.observe(msg.src)
         elif msg.type == MsgType.LEASE.value:
@@ -165,8 +176,15 @@ class ControlNode:
         self._running = False
         await self.ep.stop()
 
+    def rpc_addrs(self) -> Dict[str, str]:
+        """``node_id -> "host:port"`` rpc-server addresses learned from ANNOUNCE (Option A)."""
+        return dict(self._rpc_addrs)
+
     async def announce(self) -> None:
-        await self.ep.broadcast(MsgType.ANNOUNCE.value, _cap_body(self.capacity))
+        body = _cap_body(self.capacity)
+        if self.rpc_addr:  # omitted when empty -> ANNOUNCE wire/conformance unchanged
+            body["rpc"] = self.rpc_addr
+        await self.ep.broadcast(MsgType.ANNOUNCE.value, body)
 
     async def heartbeat(self) -> None:
         await self.ep.broadcast(MsgType.HEARTBEAT.value, {})
