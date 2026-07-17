@@ -25,6 +25,7 @@ from helix import frame as _frame
 from helix.crypto import aead_encrypt, hkdf
 from helix.identity import NodeIdentity, derive_node_id, ed25519_public, ed25519_sign
 from helix.message import PROTOCOL_VERSION, Message, MsgType
+from helix.mesh.router import _enc_data, _enc_presence
 from helix.sealer import AeadSealer, sealer_from_cluster_secret
 from helix.session import FrameCodec
 
@@ -73,6 +74,18 @@ def build_vectors() -> Dict[str, Any]:
                  b"only one tip for the future, sunscreen would be it."),
                 bytes.fromhex("50515253c0c1c2c3c4c5c6c7"),
             ).hex(),
+        },
+        "routing_envelope": {  # MeshRouter outer layer (cleartext dst over a sealed frame)
+            "data": {
+                "ttl": 8, "dst": "phone", "frame": wire.hex(),
+                "envelope": _enc_data(8, "phone", wire).hex(),
+                "layout": "kind=0(1) | ttl(1) | dst_len(2 BE) | dst(utf8) | frame",
+            },
+            "presence": {
+                "ttl": 8, "origin": "coordinator-1",
+                "envelope": _enc_presence(8, "coordinator-1").hex(),
+                "layout": "kind=1(1) | ttl(1) | origin(utf8)",
+            },
         },
         "frame": {
             "magic": _frame.MAGIC.decode(),
@@ -134,6 +147,10 @@ def verify(v: Dict[str, Any]) -> None:
     assert parsed is not None
     opened = codec.open(bytes.fromhex(v["frame"]["wire"]))
     assert opened is not None and opened.type == MsgType.LEASE.value and opened.src == "coordinator-1"
+    # Routing envelope decodes back to (dst, frame)
+    from helix.mesh.router import _decode
+    kind, ttl, dst, inner = _decode(bytes.fromhex(v["routing_envelope"]["data"]["envelope"]))
+    assert kind == 0 and dst == "phone" and inner.hex() == v["frame"]["wire"]
     # RFC anchors
     assert v["aead_rfc8439"]["sealed"].endswith("1ae10b594f09e26a7e902ecbd0600691")
     assert v["ed25519_rfc8032"]["public"] == \

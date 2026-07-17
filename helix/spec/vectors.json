@@ -13,6 +13,21 @@
     "plaintext_utf8": "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.",
     "sealed": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691"
   },
+  "routing_envelope": {
+    "data": {
+      "ttl": 8,
+      "dst": "phone",
+      "frame": "484c583101070000000102030405060708090a0b0c7998b942f0f7c71fe78ca2ac0a5531cd8c9b526af06260005a85a0b5e09dd67a4c9ac9c4e1030949c89c8aff91080e4aceaf0efffaeaafdcb8c1b301840ae543f4165b9124209518d57eeae85a042e508145fb60733a5a0c116db0fb44c8205d0caaf700d804a6c1e10f1f6fd09507c29f3a7ae8b4698b1311d27c",
+      "envelope": "0008000570686f6e65484c583101070000000102030405060708090a0b0c7998b942f0f7c71fe78ca2ac0a5531cd8c9b526af06260005a85a0b5e09dd67a4c9ac9c4e1030949c89c8aff91080e4aceaf0efffaeaafdcb8c1b301840ae543f4165b9124209518d57eeae85a042e508145fb60733a5a0c116db0fb44c8205d0caaf700d804a6c1e10f1f6fd09507c29f3a7ae8b4698b1311d27c",
+      "layout": "kind=0(1) | ttl(1) | dst_len(2 BE) | dst(utf8) | frame"
+    },
+    "presence": {
+      "ttl": 8,
+      "origin": "coordinator-1",
+      "envelope": "0108636f6f7264696e61746f722d31",
+      "layout": "kind=1(1) | ttl(1) | origin(utf8)"
+    }
+  },
   "frame": {
     "magic": "HLX1",
     "header_len": 21,

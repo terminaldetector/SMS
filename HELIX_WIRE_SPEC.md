@@ -90,9 +90,20 @@ magic(4) | flags(1) | epoch(4, BE) | nonce(12) | sealed_body(...)
 
 Абстракция: `send(node_id, frame)` / `broadcast(frame)` / `on_frame(frame_bytes)` /
 `peers()`. Обработчик получает **только байты кадра** — личность внутри. Отправка себе
-закольцовывается локально. Референс-IP-транспорт: UDP-маяки (HMAC beacon-ключом +
-timestamp) + length-prefixed TCP (лимит до аллокации). Годится для Wi-Fi Aware/Direct/LAN/
-USB-tether. BLE — отдельный низкоскоростной канал под control.
+закольцовывается локально. Несущие: length-prefixed поток (`uint32 BE длина || frame`, лимит
+до аллокации) для TCP/Wi-Fi/**USB (AOA/serial)**; message-ориентированный **BitChat/BLE**
+(целые сообщения, без length-prefix). BLE — под Track A/control, не под тяжёлые активации.
+
+## 5.1 Роутинг (звезда / кольцо / мост) — внешний конверт
+
+Для релея между несколькими транспортами (USB-звезда, мост BitChat↔wifi) — внешний
+**routing-конверт** вокруг запечатанного кадра (`dst` — cleartext-метка, payload зашифрован):
+
+- **data:** `kind=0(1) | ttl(1) | dst_len(2 BE) | dst(utf8) | frame`  (`dst="*"` = broadcast)
+- **presence:** `kind=1(1) | ttl(1) | origin(utf8)`  (флудится, строит директорию `node_id→downstream`)
+
+Релей форвардит по директории, иначе флудит; TTL + дедуп по `sha256(frame)[:16]` гасят петли.
+Векторы — в `vectors.json` (`routing_envelope`).
 
 ---
 
