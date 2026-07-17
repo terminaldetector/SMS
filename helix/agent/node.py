@@ -27,10 +27,11 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from helix.agent.card import AgentCard
-from helix.agent.context import ContentStore, ContextEntry, ContextLog
+from helix.agent.context import ContentStore, ContextEntry, ContextLog, content_ref
 from helix.agent.registry import AgentRegistry
 from helix.agent.runner import AgentRunner
 from helix.endpoint import Endpoint
+from helix.identity import Keyring, NodeIdentity
 from helix.log import get_logger
 from helix.message import Message, MsgType
 
@@ -38,6 +39,16 @@ logger = get_logger("agent")
 
 Aggregate = Callable[[Dict[str, str]], str]
 Decide = Callable[[Dict[str, Tuple[str, float]]], str]
+
+
+def _vote_fields(task: str, voter: str, candidate: str, score: float) -> Dict[str, Any]:
+    return {"kind": "vote", "task": task, "voter": voter, "candidate": candidate, "score": score}
+
+
+def _ctx_fields(entry: ContextEntry) -> Dict[str, Any]:
+    # Bind the entry to its content by hash (works for inline or ref'd content).
+    h = entry.ref if entry.ref else content_ref(entry.content or "")
+    return {"kind": "ctx", "author": entry.author, "lamport": entry.lamport, "role": entry.role, "h": h}
 
 
 def _default_aggregate(results: Dict[str, str]) -> str:
@@ -59,12 +70,23 @@ class AgentNode:
         announce_interval_s: float = 0.5,
         ttl_s: float = 3.0,
         clock=None,
+        identity: Optional[NodeIdentity] = None,
+        keyring: Optional[Keyring] = None,
     ) -> None:
         self.ep = endpoint
         self.runner = runner
         self.card = runner.card()
         self.registry = AgentRegistry(ttl_s, **({"clock": clock} if clock else {}))
         self.registry.observe(self.node_id, self.card, "free")
+
+        # HELIX ④: with an identity, votes and context entries are Ed25519-signed and
+        # verified against the keyring — attribution stops being spoofable by an insider
+        # who merely knows the group secret. Requires the endpoint id to be the
+        # self-certifying identity.node_id. Without an identity, behaviour is unchanged.
+        self.identity = identity
+        self.keyring = keyring if keyring is not None else Keyring()
+        if identity is not None:
+            self.keyring.admit(self.node_id, identity.public)
 
         self._announce_interval = announce_interval_s
         self._busy = False
@@ -82,6 +104,10 @@ class AgentNode:
 
     def on_agent_lost(self, cb: Callable[[str], None]) -> None:
         self._on_agent_lost = cb
+
+    def _require_sig(self) -> bool:
+        """Strict attribution mode: on when this node has an identity (cluster policy)."""
+        return self.identity is not None
 
     # -- shared context (CONTEXT_SYNC) -------------------------------------
     def _resolve(self, e: ContextEntry) -> str:
@@ -110,7 +136,10 @@ class AgentNode:
             entry = self.context.append(role, ref=ref)
         else:
             entry = self.context.append(role, content=content)
-        await self.ep.broadcast(MsgType.CONTEXT_SYNC.value, entry.to_body())
+        body = entry.to_body()
+        if self.identity is not None:
+            body["sig"] = self.identity.sign_claim(_ctx_fields(entry))
+        await self.ep.broadcast(MsgType.CONTEXT_SYNC.value, body)
         return entry
 
     # -- inbound -----------------------------------------------------------
@@ -118,6 +147,12 @@ class AgentNode:
         t = msg.type
         if t == MsgType.AGENT_ANNOUNCE.value:
             self.registry.observe(msg.src, AgentCard.from_body(msg.src, msg.body), None)
+            pk = msg.body.get("pk")
+            if pk:  # bootstrap the keyring (TOFU); admit() enforces id<->key binding
+                try:
+                    self.keyring.admit(msg.src, bytes.fromhex(str(pk)))
+                except ValueError:
+                    pass
         elif t == MsgType.STATUS.value:
             self.registry.observe(msg.src, None, "busy" if msg.body.get("busy") else "free")
         elif t == MsgType.TASK.value:
@@ -132,14 +167,32 @@ class AgentNode:
                 c["results"][msg.src] = str(msg.body.get("text", ""))
         elif t == MsgType.VOTE.value:
             c = self._coll.get(msg.tid)
-            if c is not None:
-                c["votes"][msg.src] = (str(msg.body.get("candidate", "")), float(msg.body.get("score", 0.0)))
+            if c is None:
+                return
+            candidate = str(msg.body.get("candidate", ""))
+            score = float(msg.body.get("score", 0.0))
+            if self._require_sig():
+                sig = msg.body.get("sig")
+                # One vote per authenticated node: the vote must carry the voter's own
+                # signature. An insider forging a vote as another node has no such key.
+                if not sig or not self.keyring.verify_claim(
+                        msg.src, _vote_fields(msg.tid, msg.src, candidate, score), str(sig)):
+                    logger.warning("dropped unsigned/forged vote attributed to %s", msg.src)
+                    return
+            c["votes"][msg.src] = (candidate, score)
         elif t == MsgType.CONTEXT_SYNC.value:
             entry = ContextEntry.from_body(msg.body)
             # Provenance: an entry's author must be the authenticated sender. This blocks
             # injecting context "as" the user or another agent (Pointer threat model §6).
             if entry is None or entry.author != msg.src:
                 return
+            if self._require_sig():
+                sig = msg.body.get("sig")
+                # Cryptographic provenance: only the author's key can sign the entry, so an
+                # insider cannot forge a turn as another node even under a valid group seal.
+                if not sig or not self.keyring.verify_claim(entry.author, _ctx_fields(entry), str(sig)):
+                    logger.warning("dropped unsigned/forged context entry from %s", entry.author)
+                    return
             if self.context.merge(entry) and entry.ref and not self._blobs.has(entry.ref):
                 self._enqueue(msg.src, MsgType.CONTEXT_PULL.value, {"ref": entry.ref}, "")
         elif t == MsgType.CONTEXT_BLOB.value:
@@ -165,8 +218,11 @@ class AgentNode:
             self._enqueue(coord, MsgType.PARTIAL.value, {"chunk": chunk}, tid)
         result = "".join(parts).strip()
         if mode == "voting":
-            self._enqueue(coord, MsgType.VOTE.value,
-                          {"candidate": result, "score": self.runner.score(prompt, result)}, tid)
+            score = self.runner.score(prompt, result)
+            body = {"candidate": result, "score": score}
+            if self.identity is not None:
+                body["sig"] = self.identity.sign_claim(_vote_fields(tid, self.node_id, result, score))
+            self._enqueue(coord, MsgType.VOTE.value, body, tid)
         else:
             self._enqueue(coord, MsgType.RESULT.value, {"text": result}, tid)
         self._busy = False
@@ -181,7 +237,10 @@ class AgentNode:
             await self.ep.send(target, type, body, tid)
 
     async def announce(self) -> None:
-        await self.ep.broadcast(MsgType.AGENT_ANNOUNCE.value, self.card.to_body())
+        body = self.card.to_body()
+        if self.identity is not None:
+            body["pk"] = self.identity.public.hex()  # lets peers admit our key (TOFU)
+        await self.ep.broadcast(MsgType.AGENT_ANNOUNCE.value, body)
         await self.ep.broadcast(MsgType.STATUS.value, {"busy": self._busy})
 
     async def start(self) -> None:

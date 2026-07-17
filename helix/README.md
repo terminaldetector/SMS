@@ -15,6 +15,7 @@ python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED
 python -m helix.agent.selftest        # Track A agents  → ALL PASSED
 python -m helix.agent.context_selftest # CONTEXT_SYNC    → ALL PASSED
 python -m helix.identity_selftest     # ④ per-node id   → ALL PASSED
+python -m helix.agent.secure_selftest # ④ signed votes  → ALL PASSED
 python -m helix.conformance --check   # wire vectors    → matches vectors.json
 ```
 
@@ -96,6 +97,7 @@ liveness and self-healing.
 | Module | Responsibility |
 |---|---|
 | `identity.py` | **Ed25519** (RFC 8032, pure stdlib, verified against the RFC test-1 vector) + `NodeIdentity` with **self-certifying ids** (`node_id = f(public_key)`) + `Keyring` (TOFU, binding-enforced). The group secret proves *membership*; a per-node signature proves *which member* — upgrading one-node-one-vote and context provenance from "a member" to "this specific node", so an insider who knows the group secret still cannot forge a vote or a turn as another node. Full Sybil resistance additionally needs cluster admission / attestation (③). |
+| `agent/node.py` (④ mode) | With an optional `identity`, `AgentNode` signs each `VOTE` and `CONTEXT_SYNC` entry and verifies incoming ones against a `Keyring` bootstrapped from `AGENT_ANNOUNCE` public keys — cryptographic attribution end-to-end. Opt-in: without an identity, behaviour is unchanged. |
 
 ## How it answers the audit
 
