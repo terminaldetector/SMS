@@ -28,7 +28,6 @@ import hashlib
 import hmac
 import json
 import socket
-import struct
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -37,10 +36,10 @@ from helix.crypto import hkdf
 from helix.frame import MAX_FRAME
 from helix.log import get_logger
 from helix.transport.base import FrameHandler, Transport
+from helix.transport.framing import frame_out, read_frame
 
 logger = get_logger("transport.wifi")
 
-_LEN_PREFIX = struct.Struct("!I")
 _BEACON_TAG_LEN = 32
 _BEACON_INFO = b"helix/1 beacon key"
 _BEACON_MAX_AGE_S = 8.0  # reject beacons whose timestamp is older/newer than this
@@ -162,7 +161,7 @@ class WifiTransport(Transport):
             return
         try:
             writer = await self._connection_for(node_id, peer)
-            writer.write(_LEN_PREFIX.pack(len(frame)) + frame)
+            writer.write(frame_out(frame))
             await writer.drain()
         except OSError as exc:
             logger.warning("send(%r) failed: %s", node_id, exc)
@@ -179,12 +178,10 @@ class WifiTransport(Transport):
     async def _on_tcp_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             while True:
-                header = await reader.readexactly(_LEN_PREFIX.size)
-                (length,) = _LEN_PREFIX.unpack(header)
-                if length > self._max_frame or length == 0:
-                    logger.warning("%s: bad frame length %d, closing", self.node_id, length)
+                frame = await read_frame(reader, self._max_frame)
+                if frame is None:
+                    logger.warning("%s: bad frame length, closing", self.node_id)
                     return  # drop connection BEFORE allocating
-                frame = await reader.readexactly(length)
                 self._deliver_local(frame)  # identity authenticated inside the frame
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass

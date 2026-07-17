@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from helix.transport.base import FrameHandler, Transport
 from helix.transport.memory import InMemoryTransport
+from helix.transport.stream import StreamTransport
 
-__all__ = ["Transport", "FrameHandler", "InMemoryTransport"]
+__all__ = ["Transport", "FrameHandler", "InMemoryTransport", "StreamTransport"]
 
 # WifiTransport pulls in asyncio sockets; import lazily so ``helix.transport`` stays
 # importable in minimal environments.
