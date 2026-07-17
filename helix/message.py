@@ -55,6 +55,10 @@ class MsgType(str, Enum):
     CONTEXT_SYNC = "CONTEXT_SYNC"  # any -> group: append-only context delta (one entry)
     CONTEXT_BLOB = "CONTEXT_BLOB"  # any -> group/peer: content-addressed blob (ref + content)
     CONTEXT_PULL = "CONTEXT_PULL"  # peer -> owner: request a blob by ref
+    # -- capability attestation (③) -------------------------------------
+    ATTEST_CHALLENGE = "ATTEST_CHALLENGE"  # verifier -> node: prove you have this capacity
+    ATTEST_PROOF = "ATTEST_PROOF"          # node -> verifier: proof-of-capability
+    ATTEST_CERT = "ATTEST_CERT"            # verifier -> all: signed capability certificate
 
 
 _TYPES = {t.value for t in MsgType}
