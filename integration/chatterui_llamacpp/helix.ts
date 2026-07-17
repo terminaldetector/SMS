@@ -67,11 +67,16 @@ export function makeLlamaAgentRunner(ctx: any, card: AgentCard): AgentRunner {
   };
 }
 
-// TS HELIX client surface still to port (small, verified against vectors.json):
+// The TS HELIX client surface is PROVEN in JS (js/agent_smoke.mjs: a JS agent joins the real
+// Python coordinator over TCP and serves single/parallel/voting/pipeline). It comprises:
 //   - frame codec (helix/frame.py + session.py FrameCodec): magic|flags|epoch|nonce|sealed
-//   - message JSON (helix/message.py): {v,t,seq,src,tid,b}
+//     -> js/frame_codec.mjs (seal with seq + open with epoch/replay), pinned to vectors.json
+//   - message JSON (helix/message.py): {v,t,seq,src,tid,b}          -> js/helix_codec.mjs
 //   - AgentNode worker: on TASK -> run AgentRunner -> stream PARTIAL -> RESULT/VOTE
-// Crypto comes from SecurityBridge (below). Coordinator role optional (a PC can coordinate).
+//     -> js/agent_node.mjs
+// To ship in ChatterUI: use makeLlamaAgentRunner as the runner, swap node:net for
+// react-native-tcp-socket, and route crypto through a native SecurityBridge (below).
+// Coordinator role optional (a PC can coordinate).
 
 // =====================================================================================
 // LEVEL 3 — SHARDING (Track B): ChatterUI contributes layers. NATIVE cui-llama.rn work.

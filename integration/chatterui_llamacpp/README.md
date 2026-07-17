@@ -10,7 +10,7 @@ naturally in RN, so on the ChatterUI side HELIX is **native/TS**.
 | Level | What ChatterUI becomes | Effort | Needs |
 |---|---|---|---|
 | **1. Client** | UI over a HELIX node | 🟢 low | a TS TCP client to `helix/host/control_server.py` (JSON-lines). No protocol port. **Proven end-to-end** — `js/control_smoke.mjs` drives the real mesh, 11/11; RN client in `control_client.ts`. |
-| **2. Agent** | its model = a **Track A** mesh agent | 🟡 med | `makeLlamaAgentRunner` (llama.rn `completion` → `AgentRunner`) + a **small TS HELIX client** (frame codec + transport + agent worker) verified vs `vectors.json`; crypto via `SecurityBridge`. |
+| **2. Agent** | its model = a **Track A** mesh agent | 🟡 med | **Proven end-to-end** — a JS HELIX agent (`js/agent_node.mjs`) joins the real Python coordinator and serves single/parallel/voting/pipeline (`js/agent_smoke.mjs`). To ship: wrap llama.rn `completion` as the `AgentRunner` (`makeLlamaAgentRunner`) + RN TCP transport. |
 | **3. Sharding** | contributes layers to a **Track B** big model | 🔴 high | **native cui-llama.rn changes**: llama.cpp RPC (`GGML_RPC`) or a `ShardRunner` over ggml. |
 
 **Key point:** the *easiest and most valuable* ChatterUI integration is **Level 2 — its whole
@@ -25,9 +25,10 @@ layer bands or RPC.
   `SecurityBridge`, and the conformance gate.
 - `control_client.ts` — **Level 1**, the RN client (`react-native-tcp-socket`) implementing
   `HelixControlClient` (JSON-lines: ping/status/nodes/context/infer/super). Transport-agnostic.
-- `js/` — **the bring-up gates, both green.** `control_client.mjs` + `control_smoke.mjs` prove
-  Level 1 end-to-end against the real Python mesh (11/11); `helix_codec.mjs` + `conformance.mjs`
-  prove the Level 2 wire vs `vectors.json` (16/16). See `js/README.md`.
+- `js/` — **the bring-up gates, all green.** Level 1: `control_client.mjs` + `control_smoke.mjs`
+  drive the real Python mesh (11/11). Level 2: `frame_codec.mjs` + `agent_node.mjs` +
+  `agent_smoke.mjs` run a JS agent that joins the real coordinator and serves all four modes;
+  `helix_codec.mjs` + `conformance.mjs` pin the wire vs `vectors.json` (16/16). See `js/README.md`.
 - `js/` — **the wire-compat gate, green.** A JS reference codec (`helix_codec.mjs`) + harness
   (`conformance.mjs`) that reproduces `helix/spec/vectors.json` byte-for-byte in plain Node
   `crypto` — the riskiest part of Level 2 (HELIX in JS/TS), now demonstrated. See `js/README.md`.
@@ -43,10 +44,11 @@ JSI/TurboModule: ChaCha20-Poly1305 + Ed25519 + HKDF). Alternatively a **shared R
 - **Level 1 — proven:** control server exists and is tested, and a client is shown driving the
   real mesh end-to-end (`js/control_smoke.mjs`, 11/11). ChatterUI ships `control_client.ts` over
   `react-native-tcp-socket` — the same framing. Fastest way to demo ChatterUI ↔ HELIX mesh.
-- **Level 2 — crux de-risked:** the `AgentRunner` mapping is concrete, and the HELIX **wire is
-  now proven reproducible in JS** (`js/` reproduces `vectors.json`, 16/16). Remaining: RN
-  transport + agent worker — plumbing over the proven codec, plus wiring crypto through a native
-  `SecurityBridge` on-device.
+- **Level 2 — proven end-to-end:** a JS HELIX agent (codec + `FrameCodec` + stream transport +
+  worker) joins the **real** Python coordinator and serves single/parallel/voting/pipeline
+  (`js/agent_smoke.mjs`); the wire is pinned to `vectors.json` (16/16). Remaining to ship in
+  ChatterUI: wrap llama.rn `completion` as the `AgentRunner` and swap `node:net` for
+  `react-native-tcp-socket` (crypto via a native `SecurityBridge` on-device). The protocol is done.
 - **Level 3 — design only:** requires native cui-llama.rn RPC/ShardRunner.
 
 ## Licensing

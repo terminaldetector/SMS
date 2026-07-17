@@ -55,17 +55,17 @@ ChatterUI — RN + llama.cpp (нативный C++), Python туда не вот
 | Уровень | ChatterUI становится | Усилие | Статус |
 |---|---|---|---|
 | **1. Client** | UI над HELIX-узлом (TCP → `control_server`) | 🟢 низкое | **доказан end-to-end** — `js/control_smoke.mjs` гоняет реальный меш (11/11); RN-клиент `control_client.ts` |
-| **2. Agent** | его модель = **Track A** агент (`completion`→`AgentRunner`) | 🟡 среднее | маппинг готов; **провод HELIX уже воспроизведён в JS** (`integration/chatterui_llamacpp/js/` сверяет `vectors.json`, 16/16) — осталось RN-транспорт + agent-worker |
+| **2. Agent** | его модель = **Track A** агент (`completion`→`AgentRunner`) | 🟡 среднее | **доказан end-to-end** — JS-агент входит в реальный Python-координатор и обслуживает single/parallel/voting/pipeline (`js/agent_smoke.mjs`); осталось обернуть llama.rn `completion` + RN-транспорт |
 | **3. Sharding** | вклад слоёв в **Track B** | 🔴 высокое | **нативные** правки cui-llama.rn (llama.cpp RPC / ShardRunner) |
 
 **Ключевое:** самый простой и ценный путь для ChatterUI — **Уровень 2 (его целая GGUF-модель как
 агент)**, а не шардинг. llama.rn отдаёт только whole-model completion — шардинг (Уровень 3) это
 форк нативного модуля. **Лицензия:** ChatterUI — AGPL-3.0; интеграция делает приложение AGPL.
 
-**Вывод:** Уровень 1 доказан end-to-end (JS-клиент гоняет реальный меш, 11/11); у Уровня 2
-**самое рискованное снято** — провод HELIX
-воспроизведён в JS (`integration/chatterui_llamacpp/js/`, `vectors.json` 16/16), осталось
-RN-транспорт + agent-worker поверх готового кодека; Уровень 3 — только дизайн (нативная работа).
+**Вывод:** Уровень 1 и Уровень 2 доказаны end-to-end на реальном Python-меше (JS-клиент — 11/11;
+JS-агент входит в координатор и обслуживает все 4 режима — single/parallel/voting/pipeline),
+провод HELIX сверен с `vectors.json` (16/16); осталось обернуть llama.rn `completion` как
+`AgentRunner` + RN-транспорт. Уровень 3 — только дизайн (нативная работа cui-llama.rn).
 
 ## Карта репозитория
 

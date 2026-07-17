@@ -1,13 +1,23 @@
 # HELIX JS — the ChatterUI bring-up gates (green)
 
-Two proofs, both runnable in plain Node, both green:
+Three proofs, all runnable in plain Node, all green:
 
 - **Level 1 (client) — proven end-to-end.** `control_client.mjs` + `control_smoke.mjs` drive the
   **real** Python HELIX mesh over TCP (spawns `helix/host/control_demo.py`): ping / status /
   nodes / context / infer(single,parallel,voting) / super, plus error-keeps-connection.
-  → `node integration/chatterui_llamacpp/js/control_smoke.mjs` → `ALL PASSED (11 checks)`.
-- **Level 2 (agent) crux — proven.** `helix_codec.mjs` + `conformance.mjs` reproduce the HELIX
-  wire byte-for-byte vs `vectors.json` (below).
+  → `ALL PASSED (11 checks)`.
+- **Level 2 (agent) — proven end-to-end.** `frame_codec.mjs` + `agent_node.mjs` + `agent_smoke.mjs`
+  run a **JS HELIX agent that joins the real Python coordinator over TCP** (spawns
+  `helix/host/agent_bridge_demo.py`) and answers `single`/`parallel`/`voting`/`pipeline` tasks
+  (announce → TASK → PARTIAL stream → RESULT/VOTE). → `ALL PASSED — served 5 tasks`.
+- **Level 2 wire gate.** `helix_codec.mjs` + `conformance.mjs` reproduce the HELIX wire
+  byte-for-byte vs `vectors.json` (the crypto/framing anchor the agent builds on).
+
+## Files
+- **Level 1:** `control_client.mjs` (JSON-lines client) · `control_smoke.mjs` (drives the mesh).
+- **Level 2:** `helix_codec.mjs` (wire codec) · `frame_codec.mjs` (`FrameCodec` seal/open + seq +
+  replay, stream framing) · `agent_node.mjs` (announce + TASK worker) · `agent_smoke.mjs`
+  (end-to-end vs the real coordinator) · `conformance.mjs` (vectors gate).
 
 ---
 
@@ -32,7 +42,11 @@ pinned to.
 node integration/chatterui_llamacpp/js/control_smoke.mjs
 # -> ALL PASSED (11 checks) — JS control client drives the real HELIX mesh (Level 1).
 
-# Level 2 — wire codec reproduces the vectors:
+# Level 2 — JS agent joins the real coordinator and serves tasks (spawns the Python coordinator):
+node integration/chatterui_llamacpp/js/agent_smoke.mjs
+# -> ALL PASSED — JS agent joined the real HELIX mesh and served 5 tasks (Level 2).
+
+# Level 2 wire gate — codec reproduces the vectors:
 node integration/chatterui_llamacpp/js/conformance.mjs
 # -> ALL PASSED (16 checks) — JS codec is wire-compatible with the Python reference.
 ```
@@ -40,11 +54,13 @@ node integration/chatterui_llamacpp/js/conformance.mjs
 ## What this de-risks
 
 The crypto + framing surface — the part a `SecurityBridge`/`FrameCodec` must get exactly right —
-is now demonstrated reproducible in JS. Node's `crypto` provides all three primitives natively;
-on-device, `react-native-quick-crypto` (JSI) or a shared Rust/C core exposes the same three, so
-the same vectors are the acceptance gate. What remains for Level 2 is **transport** (RN TCP/UDP)
-and the **agent worker** (on `TASK` → run the model → stream `PARTIAL` → `RESULT`/`VOTE`) — plumbing
-over this proven codec, not new wire design.
+is reproducible in JS, and the **full agent protocol on top of it is now proven end-to-end**
+(`agent_smoke.mjs`): a JS agent announces, receives sealed `TASK` frames, streams `PARTIAL`, and
+returns `RESULT`/`VOTE` to the real Python coordinator across all four modes. Node's `crypto`
+provides all three primitives natively; on-device, `react-native-quick-crypto` (JSI) or a shared
+Rust/C core exposes the same three, so the same vectors are the acceptance gate. What remains for
+shipping in ChatterUI is wrapping cui-llama.rn's `completion` as the `AgentRunner` (mapping in
+`../helix.ts`) and swapping `node:net` for `react-native-tcp-socket` — the protocol itself is done.
 
 > `.mjs` is a reference/gate, not the shipped module. The shipped ChatterUI client is TS over a
 > native `SecurityBridge` (see `../helix.ts`); these vectors are its conformance test.
