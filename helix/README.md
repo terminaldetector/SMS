@@ -9,6 +9,9 @@ only, so it loads under Chaquopy.
 ```bash
 python -m helix.selftest             # L2 protocol core → ALL PASSED
 python -m helix.transport.selftest   # L1 transport     → ALL PASSED
+python -m helix.transport.stream_selftest # USB byte-stream → ALL PASSED
+python -m helix.mesh.router_selftest # routing (star/ring) → ALL PASSED
+python -m helix.host.control_server  # PowerShell control  → ALL PASSED
 python -m helix.control_selftest     # L3 control plane → ALL PASSED
 python -m helix.pipeline_selftest     # L4 data plane   → ALL PASSED
 python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED

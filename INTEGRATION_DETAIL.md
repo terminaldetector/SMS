@@ -110,18 +110,36 @@ Track B). Формат: экспорт из HF/PyTorch → квантизаци�
 `resolveService()` → `node_id→(ip,port)` → TCP length-prefixed. Хороший fallback, когда все на
 одном роутере/hotspot.
 
-### 2.3 USB-OTG tether → `usb0` — проводной backbone
-Включить USB-tethering/NCM → появляется `usb0` с IP → **тот же IP-транспорт работает без
-изменений** на скорости USB. Для связки телефон↔Linux-SBC (тяжёлый узел на проводе) — лучший
-вариант (см. роадмап Phase 4).
+### 2.3 USB-OTG — байт-поток PC↔клиент (основной путь) + звезда/кольцо
+USB как **надёжный байт-поток** (AOA / usb-serial) → `StreamTransport`
+(`helix/transport/stream.py`), а не только tether→IP. Несколько потоков собираются в **звезду**
+(PC-hub) или **кольцо** через `MeshRouter` (`helix/mesh/router.py`). Каркасы:
+`integration/usb_otg/` (PC — `pc_usb.py`; клиент — `UsbStreamTransport.kt`, то же length-prefix
+кадрирование). Альтернатива — USB-tether → `usb0` IP → существующий Wi-Fi/IP-транспорт без
+изменений (для телефон↔Linux-SBC).
 
-### 2.4 Общее для всех несущих
-- **Кадрирование:** 4-байтовый length-prefix + проверка `> MAX_FRAME` **до** `readFully` (как в
-  референсе) — иначе DoS.
-- **Идентичность:** транспорт **не** сопоставляет IP↔узел для аутентификации; `src` берётся из
-  кадра кодеком. IP-карта нужна только для адресации `send`.
-- **BLE (bitchat) — опционально** как отдельный низкоскоростной канал только для presence/control
-  (маяки/heartbeat), данные — по Wi-Fi Aware/USB.
+### 2.4 BitChat / BLE — вход клиента в чат (Track A + control)
+BT-клиенты входят через **bitchat-core** (BLE-mesh + Noise) и общаются с **сервером**; серверы
+между собой — по Wi-Fi/USB. Это `MeshRouter` на сервере с двумя downstream
+(`BitChatTransport` + `WifiTransport`/`StreamTransport`). Message-ориентирован (без
+length-prefix). Директория `node_id↔peerID` — через presence-рассылку; bitchat сам делает BLE
+multi-hop. **Только Track A/control**, не тяжёлые активации. Каркас: `integration/bitchat_ble/`.
+
+### 2.5 Роутинг (звезда/кольцо/мост)
+`MeshRouter` пересылает кадры между несколькими транспортами по внешнему routing-конверту
+(cleartext `dst` над зашифрованным кадром; TTL+дедуп). Спека — `HELIX_WIRE_SPEC.md §5.1`,
+векторы — `vectors.json:routing_envelope`.
+
+### 2.6 Общее для всех несущих
+- **Кадрирование потока:** 4-байтовый length-prefix + проверка `> MAX_FRAME` **до** `readFully`
+  (`helix/transport/framing.py`) — иначе DoS. BitChat — целые сообщения, без префикса.
+- **Идентичность:** транспорт **не** сопоставляет адрес↔узел для аутентификации; `src` берётся из
+  кадра кодеком. Адрес-карта нужна только для `send`/роутинга.
+
+## 2bis. PowerShell-интерфейс на PC
+PC гоняет Python-стек + `helix/host/control_server.py` (JSON-lines на `127.0.0.1`); модуль
+`integration/powershell/Helix.psm1` даёт cmdlet'ы `Connect-Helix`, `Get-HelixNodes`,
+`Invoke-HelixInfer -Prompt -Mode -Skill`, `Add-HelixContext`.
 
 ### 2.5 Разрешения (Android)
 `NEARBY_WIFI_DEVICES` (API 33+, `neverForLocation`) или `ACCESS_FINE_LOCATION` (старее),
