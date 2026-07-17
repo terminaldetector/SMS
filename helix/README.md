@@ -15,7 +15,14 @@ python -m helix.orchestrator_selftest # L5 sessions     → ALL PASSED
 python -m helix.agent.selftest        # Track A agents  → ALL PASSED
 python -m helix.agent.context_selftest # CONTEXT_SYNC    → ALL PASSED
 python -m helix.identity_selftest     # ④ per-node id   → ALL PASSED
+python -m helix.conformance --check   # wire vectors    → matches vectors.json
 ```
+
+**Native integration:** the Python package is the reference + conformance oracle. Native
+ports (Kotlin/LiteRT for edge, C++/TS/llama.cpp for the ChatterUI fork) implement the
+language-neutral contract in [`../HELIX_WIRE_SPEC.md`](../HELIX_WIRE_SPEC.md) and prove
+byte-compatibility against `spec/vectors.json` (`python -m helix.conformance`). One wire,
+two runners (`ShardRunner`↔llama.cpp RPC, `AgentRunner`↔LiteRT) — a mode toggle in the UI.
 
 ## Two tracks on one substrate
 

@@ -1,0 +1,111 @@
+{
+  "protocol_version": 1,
+  "hkdf": {
+    "secret_utf8": "HELIX-CONFORMANCE-SECRET-v1",
+    "aead_key": "fd4b16f79107858a6226bbc8af3acc3ba11233ef5f15559371fd4ea20beb80d8",
+    "hmac_key": "1a8fdc283b7e21ca8c7365271e96cc55d4d7d2c9eafe7da9d65f9c933257010b",
+    "beacon_key": "0d68c047769712652f8daac5ba148a08fc3b51d22fba80fdb95f2ed7999dc71d"
+  },
+  "aead_rfc8439": {
+    "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "nonce": "070000004041424344454647",
+    "aad": "50515253c0c1c2c3c4c5c6c7",
+    "plaintext_utf8": "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.",
+    "sealed": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691"
+  },
+  "frame": {
+    "magic": "HLX1",
+    "header_len": 21,
+    "max_frame": 16777216,
+    "flag_confidential": 1,
+    "epoch": 7,
+    "nonce": "0102030405060708090a0b0c",
+    "message_fields": {
+      "v": 1,
+      "t": "LEASE",
+      "seq": 3,
+      "src": "coordinator-1",
+      "tid": "task-xyz",
+      "b": {
+        "term": 2,
+        "band": [
+          0,
+          4
+        ],
+        "n_layers": 8
+      }
+    },
+    "plaintext": "7b2276223a312c2274223a224c45415345222c22736571223a332c22737263223a22636f6f7264696e61746f722d31222c22746964223a227461736b2d78797a222c2262223a7b227465726d223a322c2262616e64223a5b302c345d2c226e5f6c6179657273223a387d7d",
+    "header": "484c583101070000000102030405060708090a0b0c",
+    "wire": "484c583101070000000102030405060708090a0b0c7998b942f0f7c71fe78ca2ac0a5531cd8c9b526af06260005a85a0b5e09dd67a4c9ac9c4e1030949c89c8aff91080e4aceaf0efffaeaafdcb8c1b301840ae543f4165b9124209518d57eeae85a042e508145fb60733a5a0c116db0fb44c8205d0caaf700d804a6c1e10f1f6fd09507c29f3a7ae8b4698b1311d27c"
+  },
+  "message_encodings": [
+    {
+      "desc": "ANNOUNCE",
+      "fields": {
+        "type": "ANNOUNCE",
+        "src": "n1",
+        "seq": 1,
+        "body": {
+          "mem": 8589934592
+        }
+      },
+      "bytes": "7b2276223a312c2274223a22414e4e4f554e4345222c22736571223a312c22737263223a226e31222c2262223a7b226d656d223a383538393933343539327d7d"
+    },
+    {
+      "desc": "SHARD_TOKEN",
+      "fields": {
+        "type": "SHARD_TOKEN",
+        "src": "last",
+        "seq": 9,
+        "tid": "g1",
+        "body": {
+          "step": 2,
+          "token": 42,
+          "eos": false
+        }
+      },
+      "bytes": "7b2276223a312c2274223a2253484152445f544f4b454e222c22736571223a392c22737263223a226c617374222c22746964223a226731222c2262223a7b2273746570223a322c22746f6b656e223a34322c22656f73223a66616c73657d7d"
+    },
+    {
+      "desc": "AGENT_ANNOUNCE",
+      "fields": {
+        "type": "AGENT_ANNOUNCE",
+        "src": "a1",
+        "seq": 4,
+        "body": {
+          "agent_id": "a1",
+          "skills": [
+            "rag"
+          ],
+          "task_types": [
+            "chat"
+          ]
+        }
+      },
+      "bytes": "7b2276223a312c2274223a224147454e545f414e4e4f554e4345222c22736571223a342c22737263223a226131222c2262223a7b226167656e745f6964223a226131222c22736b696c6c73223a5b22726167225d2c227461736b5f7479706573223a5b2263686174225d7d7d"
+    }
+  ],
+  "ed25519_rfc8032": {
+    "seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    "public": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "message": "",
+    "signature": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+  },
+  "node_id": {
+    "seed": "0011223344556677889900112233445566778899001122334455667788990011",
+    "public": "57bef457d577ff8fdea9d0bda43ee7df7fb82d6d7a78a11b87a940dfc5d62cd9",
+    "node_id": "hlx1efda589437850feba889",
+    "derivation": "hlx1 + sha256(public_key)[:20 hex]"
+  },
+  "signed_claim": {
+    "canonical": "json.dumps(fields, sort_keys=True, separators=(',',':'))",
+    "fields": {
+      "task": "t1",
+      "candidate": "Paris",
+      "score": 5,
+      "voter": "hlx1efda589437850feba889"
+    },
+    "signature": "12076c6f78122b2a6107422a836736ab876fafab3bcc84ec4e584b9293b94353fd9c8c0f3d54cef8427a6443bd65e8e34fac0d0ba1f4b208895341ba13639f0a"
+  }
+}
