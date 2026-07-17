@@ -1,4 +1,17 @@
-# HELIX JS codec — the ChatterUI wire-compat gate (green)
+# HELIX JS — the ChatterUI bring-up gates (green)
+
+Two proofs, both runnable in plain Node, both green:
+
+- **Level 1 (client) — proven end-to-end.** `control_client.mjs` + `control_smoke.mjs` drive the
+  **real** Python HELIX mesh over TCP (spawns `helix/host/control_demo.py`): ping / status /
+  nodes / context / infer(single,parallel,voting) / super, plus error-keeps-connection.
+  → `node integration/chatterui_llamacpp/js/control_smoke.mjs` → `ALL PASSED (11 checks)`.
+- **Level 2 (agent) crux — proven.** `helix_codec.mjs` + `conformance.mjs` reproduce the HELIX
+  wire byte-for-byte vs `vectors.json` (below).
+
+---
+
+## Level 2 wire-compat gate (crypto + framing)
 
 The riskiest part of the ChatterUI **Level 2 (agent)** integration is proving a TS/JS
 implementation can speak HELIX's wire byte-for-byte. This folder proves it — in plain Node
@@ -15,6 +28,11 @@ pinned to.
 ## Run
 
 ```bash
+# Level 1 — client drives the real mesh (spawns the Python control server itself):
+node integration/chatterui_llamacpp/js/control_smoke.mjs
+# -> ALL PASSED (11 checks) — JS control client drives the real HELIX mesh (Level 1).
+
+# Level 2 — wire codec reproduces the vectors:
 node integration/chatterui_llamacpp/js/conformance.mjs
 # -> ALL PASSED (16 checks) — JS codec is wire-compatible with the Python reference.
 ```

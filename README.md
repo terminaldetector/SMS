@@ -54,7 +54,7 @@ ChatterUI — RN + llama.cpp (нативный C++), Python туда не вот
 
 | Уровень | ChatterUI становится | Усилие | Статус |
 |---|---|---|---|
-| **1. Client** | UI над HELIX-узлом (TCP → `control_server`) | 🟢 низкое | **почти готов** — сервер есть+протестирован, нужен TS-TCP-клиент |
+| **1. Client** | UI над HELIX-узлом (TCP → `control_server`) | 🟢 низкое | **доказан end-to-end** — `js/control_smoke.mjs` гоняет реальный меш (11/11); RN-клиент `control_client.ts` |
 | **2. Agent** | его модель = **Track A** агент (`completion`→`AgentRunner`) | 🟡 среднее | маппинг готов; **провод HELIX уже воспроизведён в JS** (`integration/chatterui_llamacpp/js/` сверяет `vectors.json`, 16/16) — осталось RN-транспорт + agent-worker |
 | **3. Sharding** | вклад слоёв в **Track B** | 🔴 высокое | **нативные** правки cui-llama.rn (llama.cpp RPC / ShardRunner) |
 
@@ -62,7 +62,8 @@ ChatterUI — RN + llama.cpp (нативный C++), Python туда не вот
 агент)**, а не шардинг. llama.rn отдаёт только whole-model completion — шардинг (Уровень 3) это
 форк нативного модуля. **Лицензия:** ChatterUI — AGPL-3.0; интеграция делает приложение AGPL.
 
-**Вывод:** Уровень 1 почти готов; у Уровня 2 **самое рискованное снято** — провод HELIX
+**Вывод:** Уровень 1 доказан end-to-end (JS-клиент гоняет реальный меш, 11/11); у Уровня 2
+**самое рискованное снято** — провод HELIX
 воспроизведён в JS (`integration/chatterui_llamacpp/js/`, `vectors.json` 16/16), осталось
 RN-транспорт + agent-worker поверх готового кодека; Уровень 3 — только дизайн (нативная работа).
 
