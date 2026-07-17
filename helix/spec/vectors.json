@@ -99,8 +99,48 @@
         }
       },
       "bytes": "7b2276223a312c2274223a224147454e545f414e4e4f554e4345222c22736571223a342c22737263223a226131222c2262223a7b226167656e745f6964223a226131222c22736b696c6c73223a5b22726167225d2c227461736b5f7479706573223a5b2263686174225d7d7d"
+    },
+    {
+      "desc": "FEED",
+      "fields": {
+        "type": "FEED",
+        "src": "coord",
+        "seq": 1,
+        "tid": "g1",
+        "body": {
+          "step": 0,
+          "token": 5
+        }
+      },
+      "bytes": "7b2276223a312c2274223a2246454544222c22736571223a312c22737263223a22636f6f7264222c22746964223a226731222c2262223a7b2273746570223a302c22746f6b656e223a357d7d"
     }
   ],
+  "activation_codec": {
+    "input": [
+      0.0,
+      1.5,
+      -3.25,
+      12.0,
+      -12.0,
+      0.5
+    ],
+    "raw": {
+      "raw": [
+        0.0,
+        1.5,
+        -3.25,
+        12.0,
+        -12.0,
+        0.5
+      ]
+    },
+    "int8": {
+      "q": "gJBe/wGF",
+      "s": 0.09448818897637795,
+      "n": 6
+    },
+    "note": "int8: q=base64(uint8, value+128), s=max|x|/127 (1.0 if all-zero), n=len; decode x=(byte-128)*s. Sample reads hidden[0]=max -> quantizes losslessly."
+  },
   "ed25519_rfc8032": {
     "seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
     "public": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",

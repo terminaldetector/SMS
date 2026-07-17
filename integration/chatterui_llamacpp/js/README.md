@@ -1,6 +1,6 @@
 # HELIX JS — the ChatterUI bring-up gates (green)
 
-Four proofs, all runnable in plain Node, all green:
+Five proofs, all runnable in plain Node, all green:
 
 - **Level 1 (client) — proven end-to-end.** `control_client.mjs` + `control_smoke.mjs` drive the
   **real** Python HELIX mesh over TCP (spawns `helix/host/control_demo.py`): ping / status /
@@ -12,10 +12,15 @@ Four proofs, all runnable in plain Node, all green:
   (announce → TASK → PARTIAL stream → RESULT/VOTE). → `ALL PASSED — served 5 tasks`.
 - **Level 2 wire gate.** `helix_codec.mjs` + `conformance.mjs` reproduce the HELIX wire
   byte-for-byte vs `vectors.json` (the crypto/framing anchor the agent builds on).
-- **Level 3 (sharding control plane) — proven end-to-end.** `rpc_smoke.mjs` asks the real Python
-  coordinator (`helix/host/rpc_plan_demo.py`) to place a big model and returns the llama.cpp RPC
-  topology (`ring` / `--rpc` / `--tensor-split` / `main`). → `ALL PASSED (7 checks)`. The tensor
+- **Level 3 — Option A (RPC control plane) proven end-to-end.** `rpc_smoke.mjs` asks the real
+  Python coordinator (`helix/host/rpc_plan_demo.py`) to place a big model and returns the llama.cpp
+  RPC topology (`ring` / `--rpc` / `--tensor-split` / `main`). → `ALL PASSED (7 checks)`. Tensor
   math + RPC transport are llama.cpp's (native); HELIX supplies discovery/placement/topology.
+- **Level 3 — Option B (full HELIX ring) proven end-to-end.** `shard_smoke.mjs` runs a JS shard
+  worker that joins a REAL Python layer-shard ring (`helix/host/shard_bridge_demo.py`) and threads
+  activations through its band (`FEED`/`ACTIVATION`/`SHARD_TOKEN` + activation codec, sealed
+  frames) → tokens `[7,13,19]` (both bands ran). The tensor math is the numeric reference; a real
+  node swaps in a native ggml `ShardRunner` behind the same seam.
 
 ## Files
 - **Level 1:** `control_client.mjs` (JSON-lines client, incl. `rpcPlan`) · `control_smoke.mjs`
@@ -23,8 +28,9 @@ Four proofs, all runnable in plain Node, all green:
 - **Level 2:** `helix_codec.mjs` (wire codec) · `frame_codec.mjs` (`FrameCodec` seal/open + seq +
   replay, stream framing) · `agent_node.mjs` (announce + TASK worker) · `agent_smoke.mjs`
   (end-to-end vs the real coordinator) · `conformance.mjs` (vectors gate).
-- **Level 3:** `rpc_smoke.mjs` (gets a real llama.cpp RPC plan from HELIX). Native side in
-  `../LEVEL3_sharding.md`.
+- **Level 3:** `rpc_smoke.mjs` (Option A: llama.cpp RPC plan from HELIX) · `activation.mjs`
+  (raw + int8 codec) · `shard_node.mjs` (`ShardNode` ring worker + `NumericShardRunner`) ·
+  `shard_smoke.mjs` (Option B: JS shard joins the real ring). Native side in `../LEVEL3_sharding.md`.
 
 ---
 
@@ -57,9 +63,13 @@ node integration/chatterui_llamacpp/js/agent_smoke.mjs
 node integration/chatterui_llamacpp/js/conformance.mjs
 # -> ALL PASSED (16 checks) — JS codec is wire-compatible with the Python reference.
 
-# Level 3 — JS gets a real llama.cpp RPC plan from HELIX (spawns the Python coordinator):
+# Level 3 Option A — JS gets a real llama.cpp RPC plan from HELIX:
 node integration/chatterui_llamacpp/js/rpc_smoke.mjs
 # -> ALL PASSED (7 checks) — JS drives the real HELIX Level 3 control plane (Option A).
+
+# Level 3 Option B — JS shard worker joins a real HELIX ring and threads activations:
+node integration/chatterui_llamacpp/js/shard_smoke.mjs
+# -> ALL PASSED — JS shard joined the real HELIX ring and threaded 3 activations (Option B).
 ```
 
 ## What this de-risks

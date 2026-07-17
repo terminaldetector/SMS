@@ -11,7 +11,7 @@ naturally in RN, so on the ChatterUI side HELIX is **native/TS**.
 |---|---|---|---|
 | **1. Client** | UI over a HELIX node | 🟢 low | a TS TCP client to `helix/host/control_server.py` (JSON-lines). No protocol port. **Proven end-to-end** — `js/control_smoke.mjs` drives the real mesh, 11/11; RN client in `control_client.ts`. |
 | **2. Agent** | its model = a **Track A** mesh agent | 🟡 med | **Proven end-to-end** — a JS HELIX agent (`js/agent_node.mjs`) joins the real Python coordinator and serves single/parallel/voting/pipeline (`js/agent_smoke.mjs`). To ship: wrap llama.rn `completion` as the `AgentRunner` (`makeLlamaAgentRunner`) + RN TCP transport. |
-| **3. Sharding** | contributes layers to a **Track B** big model | 🔴 high | **native cui-llama.rn changes**: llama.cpp RPC (`GGML_RPC`) or a `ShardRunner` over ggml. **Control plane proven** — `js/rpc_smoke.mjs` gets a real `--rpc`/`--tensor-split` plan from HELIX; native RPC build is the remaining work. See `LEVEL3_sharding.md`. |
+| **3. Sharding** | contributes layers to a **Track B** big model | 🔴 high | **native cui-llama.rn changes**: llama.cpp RPC (`GGML_RPC`) or a `ShardRunner` over ggml. **Both wires proven** — Option A: `js/rpc_smoke.mjs` gets a real `--rpc`/`--tensor-split` plan (7/7); Option B: `js/shard_smoke.mjs` runs a JS shard in a real HELIX ring (`[7,13,19]`). Remaining is native tensor execution. See `LEVEL3_sharding.md`. |
 
 **Key point:** the *easiest and most valuable* ChatterUI integration is **Level 2 — its whole
 GGUF model as a Track A agent** (a mesh of ChatterUI phones = a Pointer mesh of GGUF models),
@@ -53,10 +53,14 @@ JSI/TurboModule: ChaCha20-Poly1305 + Ed25519 + HKDF). Alternatively a **shared R
   (`js/agent_smoke.mjs`); the wire is pinned to `vectors.json` (16/16). Remaining to ship in
   ChatterUI: wrap llama.rn `completion` as the `AgentRunner` and swap `node:net` for
   `react-native-tcp-socket` (crypto via a native `SecurityBridge` on-device). The protocol is done.
-- **Level 3 — control plane proven, native pending:** HELIX places a model by (attested) memory
-  and returns the llama.cpp `--rpc`/`--tensor-split` topology (`js/rpc_smoke.mjs`, 7/7). The
-  remaining work is the native cui-llama.rn `GGML_RPC` build + `startRpcServer`/`--rpc` methods
-  (Option A), then optionally a ggml `ShardRunner` (Option B). See `LEVEL3_sharding.md`.
+- **Level 3 — both wires proven, native tensor exec pending:**
+  - *Option A (RPC):* HELIX places a model by (attested) memory and returns the llama.cpp
+    `--rpc`/`--tensor-split` topology (`js/rpc_smoke.mjs`, 7/7). Remaining: native `GGML_RPC` build
+    + `startRpcServer`/`--rpc` methods.
+  - *Option B (full HELIX ring):* a JS shard worker joins a real HELIX layer-shard ring and threads
+    activations through its band (`js/shard_smoke.mjs`, tokens `[7,13,19]`); the activation codec is
+    pinned in `vectors.json`. Remaining: a native ggml `ShardRunner` behind the same seam.
+  See `LEVEL3_sharding.md`.
 
 ## Licensing
 ChatterUI is **AGPL-3.0**. Integrating HELIX makes the combined app AGPL — confirm this is

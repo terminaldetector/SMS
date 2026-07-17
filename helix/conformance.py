@@ -22,6 +22,7 @@ import sys
 from typing import Any, Dict
 
 from helix import frame as _frame
+from helix.activation import Int8ActivationCodec, RawActivationCodec
 from helix.crypto import aead_encrypt, hkdf
 from helix.identity import NodeIdentity, derive_node_id, ed25519_public, ed25519_sign
 from helix.message import PROTOCOL_VERSION, Message, MsgType
@@ -36,6 +37,7 @@ SECRET = b"HELIX-CONFORMANCE-SECRET-v1"
 NONCE = bytes.fromhex("0102030405060708090a0b0c")
 EPOCH = 7
 SEED = bytes.fromhex("0011223344556677889900112233445566778899001122334455667788990011")
+_ACT_IN = [0.0, 1.5, -3.25, 12.0, -12.0, 0.5]  # fixed activation vector for the codec vectors
 
 
 def build_vectors() -> Dict[str, Any]:
@@ -114,7 +116,21 @@ def build_vectors() -> Dict[str, Any]:
              "bytes": Message(MsgType.AGENT_ANNOUNCE.value, "a1",
                               {"agent_id": "a1", "skills": ["rag"], "task_types": ["chat"]},
                               seq=4).serialize().hex()},
+            # Track B ring control (integer-only bodies -> byte-exact across languages).
+            {"desc": "FEED", "fields": {"type": MsgType.FEED.value, "src": "coord", "seq": 1,
+                                        "tid": "g1", "body": {"step": 0, "token": 5}},
+             "bytes": Message(MsgType.FEED.value, "coord", {"step": 0, "token": 5},
+                              seq=1, tid="g1").serialize().hex()},
         ],
+        # Track B activation codec (HELIX ①). Pinned numerically (not by JSON float formatting):
+        # a port must reproduce the int8 quantization (q bytes, scale, length) and the raw list.
+        "activation_codec": {
+            "input": _ACT_IN,
+            "raw": RawActivationCodec().encode(_ACT_IN),
+            "int8": Int8ActivationCodec().encode(_ACT_IN),
+            "note": "int8: q=base64(uint8, value+128), s=max|x|/127 (1.0 if all-zero), n=len; "
+                    "decode x=(byte-128)*s. Sample reads hidden[0]=max -> quantizes losslessly.",
+        },
         "ed25519_rfc8032": {  # external anchor: RFC 8032 test 1
             "seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
             "public": ed25519_public(
@@ -155,6 +171,11 @@ def verify(v: Dict[str, Any]) -> None:
     assert v["aead_rfc8439"]["sealed"].endswith("1ae10b594f09e26a7e902ecbd0600691")
     assert v["ed25519_rfc8032"]["public"] == \
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+    # Activation codec: int8 vector round-trips within one scale step, and re-encodes identically.
+    ac = v["activation_codec"]
+    assert Int8ActivationCodec().encode(ac["input"]) == ac["int8"]
+    back = Int8ActivationCodec().decode(ac["int8"])
+    assert all(abs(a - b) <= ac["int8"]["s"] for a, b in zip(ac["input"], back))
     # Self-certifying id + claim signature round-trip
     idn = NodeIdentity(SEED)
     assert idn.node_id == v["node_id"]["node_id"]

@@ -18,10 +18,14 @@ export const NONCE_LEN = 12;
 export const MAX_FRAME = 16 * 1024 * 1024;
 export const PROTOCOL_VERSION = 1;
 
-// Message types actually used by the agent worker (helix/message.py MsgType).
+// Message types used by the agent worker (Track A) and the shard ring (Track B). See
+// helix/message.py MsgType.
 export const Msg = {
+  // Track A (agent coordination)
   AGENT_ANNOUNCE: "AGENT_ANNOUNCE", STATUS: "STATUS", TASK: "TASK",
   PARTIAL: "PARTIAL", RESULT: "RESULT", VOTE: "VOTE", DECIDE: "DECIDE",
+  // Track B (layer-shard ring)
+  FEED: "FEED", ACTIVATION: "ACTIVATION", SHARD_TOKEN: "SHARD_TOKEN",
 };
 
 // Parse the sealed plaintext back into a message (mirrors helix/message.py Message.parse).

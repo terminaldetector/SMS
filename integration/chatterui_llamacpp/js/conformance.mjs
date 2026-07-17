@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as h from "./helix_codec.mjs";
+import { Int8ActivationCodec } from "./activation.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const vectors = JSON.parse(fs.readFileSync(path.join(here, "../../../helix/spec/vectors.json"), "utf8"));
@@ -75,6 +76,20 @@ eq(h.hkdf(secret, Buffer.from("helix/1 beacon key"), 32).toString("hex"), vector
   eq(h.encData(d.ttl, d.dst, Buffer.from(d.frame, "hex")).toString("hex"), d.envelope, "routing data envelope");
   const p = vectors.routing_envelope.presence;
   eq(h.encPresence(p.ttl, p.origin).toString("hex"), p.envelope, "routing presence envelope");
+}
+
+// 7. Activation codec (Track B / HELIX ①) — pinned numerically (not by JSON float formatting)
+{
+  const ac = vectors.activation_codec;
+  const enc = new Int8ActivationCodec().encode(ac.input);
+  eq(Buffer.from(enc.q, "base64").toString("hex"), Buffer.from(ac.int8.q, "base64").toString("hex"),
+     "int8 activation q bytes");
+  if (enc.n !== ac.int8.n) throw new Error(`int8 n: ${enc.n} != ${ac.int8.n}`);
+  if (Math.abs(enc.s - ac.int8.s) > 1e-12) throw new Error(`int8 scale: ${enc.s} != ${ac.int8.s}`);
+  pass += 1; console.log("  ok  int8 activation scale+len");
+  const back = new Int8ActivationCodec().decode(ac.int8);
+  if (!ac.input.every((x, i) => Math.abs(x - back[i]) <= ac.int8.s)) throw new Error("int8 round-trip");
+  pass += 1; console.log("  ok  int8 activation round-trip within scale");
 }
 
 // round-trip sanity: open the sealed frame back

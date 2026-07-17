@@ -56,7 +56,7 @@ ChatterUI — RN + llama.cpp (нативный C++), Python туда не вот
 |---|---|---|---|
 | **1. Client** | UI над HELIX-узлом (TCP → `control_server`) | 🟢 низкое | **доказан end-to-end** — `js/control_smoke.mjs` гоняет реальный меш (11/11); RN-клиент `control_client.ts` |
 | **2. Agent** | его модель = **Track A** агент (`completion`→`AgentRunner`) | 🟡 среднее | **доказан end-to-end** — JS-агент входит в реальный Python-координатор и обслуживает single/parallel/voting/pipeline (`js/agent_smoke.mjs`); осталось обернуть llama.rn `completion` + RN-транспорт |
-| **3. Sharding** | вклад слоёв в **Track B** | 🔴 высокое | **control plane доказан** — HELIX размещает модель по (доказанной) памяти и отдаёт `--rpc`/`--tensor-split` (`js/rpc_smoke.mjs`, 7/7); осталась **нативная** RPC-сборка cui-llama.rn (`GGML_RPC`). См. `integration/chatterui_llamacpp/LEVEL3_sharding.md` |
+| **3. Sharding** | вклад слоёв в **Track B** | 🔴 высокое | **оба провода доказаны** — Option A: HELIX отдаёт `--rpc`/`--tensor-split` (`js/rpc_smoke.mjs`, 7/7); Option B: JS-шард входит в реальное HELIX-кольцо и прогоняет активации через свою полосу (`js/shard_smoke.mjs`, `[7,13,19]`). Осталась **нативная** тензорная часть. См. `integration/chatterui_llamacpp/LEVEL3_sharding.md` |
 
 **Ключевое:** самый простой и ценный путь для ChatterUI — **Уровень 2 (его целая GGUF-модель как
 агент)**, а не шардинг. llama.rn отдаёт только whole-model completion — шардинг (Уровень 3) это
@@ -65,9 +65,10 @@ ChatterUI — RN + llama.cpp (нативный C++), Python туда не вот
 **Вывод:** Уровни 1–2 доказаны end-to-end на реальном Python-меше (JS-клиент — 11/11; JS-агент
 входит в координатор и обслуживает все 4 режима — single/parallel/voting/pipeline), провод HELIX
 сверен с `vectors.json` (16/16); осталось обернуть llama.rn `completion` как `AgentRunner` +
-RN-транспорт. У **Уровня 3 доказан control plane** — HELIX размещает модель по (доказанной) памяти
-и отдаёт llama.cpp `--rpc`/`--tensor-split` (`js/rpc_smoke.mjs`, 7/7); осталась нативная
-`GGML_RPC`-сборка cui-llama.rn (Option A) — детали в `integration/chatterui_llamacpp/LEVEL3_sharding.md`.
+RN-транспорт. У **Уровня 3 доказаны оба провода** — Option A: HELIX отдаёт llama.cpp `--rpc`/`--tensor-split`
+(`js/rpc_smoke.mjs`, 7/7); Option B: JS-шард входит в реальное HELIX-кольцо и прогоняет активации
+через свою полосу (`js/shard_smoke.mjs`, `[7,13,19]`). Осталась только нативная тензорная часть
+(`GGML_RPC` или ggml-`ShardRunner`) — детали в `integration/chatterui_llamacpp/LEVEL3_sharding.md`.
 
 ## Карта репозитория
 
@@ -77,7 +78,8 @@ RN-транспорт. У **Уровня 3 доказан control plane** — HE
 - L3 control: `placement`, `roster`, `control` · L4 data: `shard`, `activation`, `pipeline`
 - L5: `orchestrator` · Track A: `agent/*` · безопасность: `identity`, `attest`
 - суперагент: `super/*` · Track B / Option A: `rpc_cluster` (план llama.cpp RPC-кластера)
-- PC: `host/{control_server,control_demo,agent_bridge_demo,rpc_plan_demo}` · интероп: `conformance`, `spec/vectors.json`
+- PC/демо: `host/{control_server,control_demo,agent_bridge_demo,rpc_plan_demo,shard_bridge_demo}`
+- интероп: `conformance`, `spec/vectors.json` (вкл. `activation_codec` — векторы int8-кодека)
 
 **Интеграция (каркасы):** `integration/`
 - `edge_litert/` (Kotlin: LiteRT-раннер + MeshService), `chatterui_llamacpp/` (TS-контракты),

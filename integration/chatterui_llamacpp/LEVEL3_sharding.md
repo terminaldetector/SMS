@@ -82,10 +82,16 @@ it beyond LAN:
 - **Fine-grained healing/resume** — re-place over survivors and resume decode from the last token
   (`helix/orchestrator.py` already does this against the reference `NumericShardRunner`).
 
-The whole ring protocol is already proven in Python (`helix/pipeline_selftest.py`: a real L3
-placement → L4 ring → tokens that only match if every band ran). The gap is a **native ggml
-`ShardRunner`** (band execution + hidden-state I/O) inside cui-llama.rn — a substantial C++ task,
-deferred until Option A is shipping.
+The whole ring protocol is proven in Python (`helix/pipeline_selftest.py`: a real L3 placement →
+L4 ring → tokens that only match if every band ran) **and now cross-language in JS**: a JS shard
+worker joins a real Python ring over TCP and threads activations through its band —
+`node integration/chatterui_llamacpp/js/shard_smoke.mjs` → tokens `[7,13,19]` (both bands ran over
+sealed HELIX frames). So the **data-plane wire** (`FEED`/`ACTIVATION`/`SHARD_TOKEN` + the int8/raw
+activation codec, pinned by `vectors.json` `activation_codec`) is reproducible in the native/TS
+layer. The remaining gap is the **native ggml `ShardRunner`** (real band execution + hidden-state
+I/O) inside cui-llama.rn — a substantial C++ task, deferred until Option A is shipping. It plugs in
+behind the exact seam the JS `NumericShardRunner` fills (`embed` / `forward` a band / `sample` /
+`detok`); the ring, framing, codec, healing and transport around it are done.
 
 ---
 
