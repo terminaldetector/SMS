@@ -65,6 +65,10 @@ are unchanged.
    the driver calls `startShardMain(client, initLlama, model)` which fetches `rpcPlan()` and inits
    the model with the RPC topology. See also `LlamaRpcCluster` in `helix.ts`.
 
+**→ Exact fork recipe:** `FORK_cui-llama-rpc.md` — a file-by-file patch guide grounded in the real
+`cui-llama.rn@1.11.14` / llama.cpp b9309 source (vendor `ggml-rpc`, add `rpc_servers` to
+`common_params`, `-DLM_GGML_USE_RPC`, JSI param read, TS types, `startRpcServer`, build-from-source).
+
 ### Sharding you can run today (llama.cpp binaries — no app fork)
 
 You don't need the cui-llama.rn fork to *try* sharding: HELIX plans the topology and stock

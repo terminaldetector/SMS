@@ -6,8 +6,9 @@
 // integration/chatterui_llamacpp/js/rpc_smoke.mjs, 7/7). The tensor split needs a NATIVE fork of
 // cui-llama.rn (it currently exposes NO RPC): build llama.cpp with -DGGML_RPC=ON, add an
 // `rpc_servers` context param, and expose `startRpcServer(port)`. This module is the TS seam that
-// consumes that native surface — see LEVEL3_sharding.md for the exact native changes. Until the
-// fork exists, L3 does not run on-device (L1 + L2 do).
+// consumes that native surface. The exact, file-by-file fork recipe (grounded in cui-llama.rn
+// 1.11.14 / llama.cpp b9309) is in FORK_cui-llama-rpc.md. Until the fork exists, L3 does not run
+// on-device (L1 + L2 do).
 
 import { HelixClient, RpcClusterPlan } from './helixClient'
 
