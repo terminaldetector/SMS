@@ -36,6 +36,24 @@ or a fused SuperAgent). Pure `fetch`, **no new native module**.
    *(Alternative: ChatterUI's own flow — rename `eas.json.example`→`eas.json`, set
    `ANDROID_SDK_ROOT`, `npm install && npx eas build --platform android --local`.)*
 
+### Build in CI (recommended — no local Android SDK needed)
+
+GitHub-hosted runners have the Android SDK and full internet, and `cui-llama.rn` ships prebuilt
+native libs, so CI builds the APK cleanly (it does not compile llama.cpp).
+
+1. On your ChatterUI fork's `helix-mesh-mod` branch, add the L2 deps so `npm ci` installs them:
+   ```bash
+   npm i @noble/ciphers @noble/curves @noble/hashes react-native-tcp-socket react-native-get-random-values
+   git commit -am "deps: HELIX mesh (@noble + tcp-socket + get-random-values)"
+   ```
+2. Copy [`ci/build-apk.yml`](ci/build-apk.yml) to `.github/workflows/build-apk.yml` in your fork and
+   push the branch.
+3. **Actions → Build APK → Run workflow** (or it runs on push to `helix-mesh-mod`). Download the APK
+   from the run's **Artifacts** (`chatterui-helix-apk`), then `adb install -r <apk>`.
+
+The workflow assembles a debug (installable) APK by default; choose `assembleRelease` from the
+Run-workflow inputs if you have signing configured.
+
 ## Run a first experiment
 
 1. **Start a HELIX node** on a PC or a Python-capable phone on the **same Wi-Fi**, bound so the

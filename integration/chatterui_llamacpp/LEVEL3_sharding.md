@@ -44,16 +44,26 @@ are unchanged.
 
 ### Native work in cui-llama.rn (the remaining, off-device part)
 
-1. **Build with RPC:** compile the bundled llama.cpp with `-DGGML_RPC=ON` for the Android ABIs.
-2. **Worker method:** expose `startRpcServer(port)` (binds `ggml`'s `rpc-server` on
-   `0.0.0.0:port`). Every participating phone calls it and announces its `host:port` (that becomes
-   the `rpc` field HELIX advertises).
-3. **Main/driver method:** let `initLlama` / the context init accept an `--rpc` endpoint list and
-   `--tensor-split` ratios (thread them into the `common_params` llama.cpp already parses). The
-   ChatterUI driver phone reads `plan.rpc_arg` / `plan.tensor_split` from `rpcPlan()` and runs its
-   normal `completion` — now distributed.
-4. **Wire-up:** ChatterUI JS calls `HelixControlClient.rpcPlan({model_id,n_layers,model_bytes})`,
-   starts `rpc-server` on workers, runs `completion` on `main`. See `LlamaRpcCluster` in `helix.ts`.
+> **Confirmed:** `cui-llama.rn` (Vali-98) exposes **no RPC** — `ContextParams` / `NativeContextParams`
+> / `initLlama` have no `rpc_servers` and the build has no `GGML_RPC`. So Level 3 needs a **native
+> fork** of the module. Levels 1–2 need none of this. The TS seam that consumes the fork is
+> `app_mod/lib/helixRpc.ts` (`NativeHelixRpc` + `RpcInitLlama`); the control plane it calls
+> (`HelixClient.rpcPlan`) is done and proven (`js/rpc_smoke.mjs`, 7/7).
+
+1. **Build with RPC:** compile the bundled llama.cpp with `-DGGML_RPC=ON` for the Android ABIs
+   (the Gradle/CMake for the module's `android/` — cui-llama.rn already builds ggml from source
+   there, so this is a build flag + linking the rpc backend).
+2. **Worker method (`startRpcServer(port)`):** wrap ggml's `rpc-server` (or `ggml_backend_rpc_start_server`)
+   as a TurboModule method binding `0.0.0.0:port`. Each phone calls it and announces its `host:port`
+   (becomes the `rpc` field in HELIX `ANNOUNCE` — already supported, `helix/control.py`).
+3. **Main/driver — `rpc_servers` + `tensor_split` params:** add `rpc_servers?: string[]` and
+   `tensor_split?: number[]` to `ContextParams` **and** `NativeContextParams` (`src/`), thread them
+   through the bridge (`android/src/main/java/com/rnllama/*` + `cpp/rnllama.cpp`) into llama.cpp's
+   `common_params.rpc_servers` / `tensor_split`. The driver phone then loads the model distributed
+   (`helixRpc.ts` `startShardMain` passes `plan.rpc_arg.split(',')` + `plan.tensor_split`).
+4. **Wire-up (TS, ready):** `app_mod/lib/helixRpc.ts` — workers call `startShardWorker(native)`,
+   the driver calls `startShardMain(client, initLlama, model)` which fetches `rpcPlan()` and inits
+   the model with the RPC topology. See also `LlamaRpcCluster` in `helix.ts`.
 
 ### Honest caveats (Option A)
 

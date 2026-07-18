@@ -1,0 +1,79 @@
+# ChatterUI + HELIX mesh mod — build an installable APK on GitHub-hosted runners.
+#
+# Copy this to YOUR ChatterUI fork at .github/workflows/build-apk.yml, on the branch that has the
+# mesh mod applied (see app_mod/apply.md) and the L2 deps in package.json. GitHub runners have the
+# Android SDK + full internet (unlike a locked-down sandbox), and cui-llama.rn ships PREBUILT native
+# libs, so this does NOT compile llama.cpp — it just prebuilds the Expo project and assembles the APK.
+#
+# Run it: Actions tab -> "Build APK" -> Run workflow. Download the APK from the run's Artifacts.
+
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Gradle variant'
+        type: choice
+        default: assembleDebug
+        options: [assembleDebug, assembleRelease]
+  push:
+    branches: [helix-mesh-mod]
+    paths-ignore: ['**/*.md']
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform + NDK
+        run: |
+          # cui-llama.rn is prebuilt, but RN 0.83 (new arch) codegen still needs the NDK.
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Install JS dependencies
+        run: npm ci   # runs patch-package (postinstall); installs @noble/*, react-native-tcp-socket, etc.
+
+      - name: Expo prebuild (generate android/)
+        run: npx expo prebuild --platform android --clean
+
+      - name: Gradle build
+        working-directory: android
+        run: ./gradlew ${{ github.event.inputs.variant || 'assembleDebug' }} --no-daemon
+
+      - name: Locate APK
+        id: apk
+        run: echo "path=$(find android/app/build/outputs/apk -name '*.apk' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterui-helix-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error

@@ -1,0 +1,59 @@
+# HELIX protocol CI — runs the full proof suite on every push/PR: the Python reference selftests,
+# the conformance vector check, compileall, and all 9 cross-language JS smokes (each spawns the real
+# Python mesh). Green = the protocol + all ChatterUI integration wires are intact.
+
+name: HELIX CI
+
+on:
+  push:
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install JS crypto deps (@noble)
+        working-directory: integration/chatterui_llamacpp/js
+        run: npm ci
+
+      - name: Python selftests
+        run: |
+          set -e
+          for m in helix.selftest helix.transport.selftest helix.transport.stream_selftest \
+                   helix.mesh.router_selftest helix.host.control_server helix.control_selftest \
+                   helix.pipeline_selftest helix.orchestrator_selftest helix.agent.selftest \
+                   helix.agent.context_selftest helix.agent.secure_selftest helix.identity_selftest \
+                   helix.attest_selftest helix.super.selftest helix.rpc_cluster helix.host.bandwidth; do
+            echo "== $m =="; PYTHONPATH=. python3 -m "$m"
+          done
+
+      - name: Conformance + compileall
+        run: |
+          set -e
+          PYTHONPATH=. python3 -m helix.conformance --check
+          python3 -m compileall -q helix
+
+      - name: JS proofs (9 smokes, each drives the real Python mesh)
+        env:
+          PYTHON: python3
+        run: |
+          set -e
+          for s in conformance conformance_noble control_smoke http_smoke agent_smoke \
+                   l2_host_smoke rpc_smoke shard_smoke heal_smoke; do
+            echo "== $s.mjs =="; node "integration/chatterui_llamacpp/js/$s.mjs"
+          done

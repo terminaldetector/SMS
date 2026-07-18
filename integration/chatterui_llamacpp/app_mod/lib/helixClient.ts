@@ -74,4 +74,20 @@ export class HelixClient {
         const r = await this.cmd({ cmd: 'super', prompt, strategy })
         return String(r.result ?? '')
     }
+
+    // Level 3 / Option A: ask HELIX to place a big model and return the llama.cpp RPC topology.
+    // The coordinator must be a ControlNode (agent_dispatch(control=...)). See helixRpc.ts.
+    async rpcPlan(model: { model_id: string; n_layers: number; model_bytes: number }): Promise<RpcClusterPlan> {
+        const r = await this.cmd({ cmd: 'rpc_plan', ...model })
+        return r as unknown as RpcClusterPlan
+    }
+}
+
+export interface RpcClusterPlan {
+    ok: boolean
+    ring: string[]
+    endpoints: { node: string; addr: string; band: [number, number]; role: 'main' | 'worker' }[]
+    main: string
+    rpc_arg: string // "h1:p1,h2:p2" -> llama.cpp --rpc (workers)
+    tensor_split: number[] // -> --tensor-split, spans [main-local, worker0, ...]
 }
