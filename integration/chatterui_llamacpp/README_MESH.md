@@ -50,14 +50,63 @@ or a fused SuperAgent). Pure `fetch`, **no new native module**.
 4. Type a prompt, pick a mode, **Run** — the answer comes from the HELIX mesh (not the phone's
    local model). Try **SuperAgent** for the fused Track A + Track B response.
 
+## Level 2 — the phone's model as a mesh agent
+
+Level 2 makes ChatterUI's **own GGUF model** a Track-A agent: a coordinator sends it tasks and it
+answers by running `cui-llama.rn` completion, over sealed HELIX frames. **No native crypto module**
+— all HELIX crypto is pure JS via `@noble` (proven wire-compatible:
+`node integration/chatterui_llamacpp/js/conformance_noble.mjs`, 19/19). The whole loop
+(agent joins → prompt routed to it → its model answers) is proven in-env:
+`node integration/chatterui_llamacpp/js/l2_host_smoke.mjs` (5/5).
+
+**Dependencies to add** to ChatterUI:
+```bash
+npm i @noble/ciphers @noble/curves @noble/hashes react-native-tcp-socket react-native-get-random-values
+```
+Import the RNG polyfill once at app entry (top of `app/_layout.tsx`):
+```ts
+import 'react-native-get-random-values'
+```
+
+**Files** (from `app_mod/lib/`, alongside `helixClient.ts`):
+`helixCrypto.ts` (@noble codec), `helixFrame.ts` (`FrameCodec` + stream framing),
+`helixAgent.ts` (`HelixAgentNode` + `makeLlamaAgentRunner`).
+
+**Wire it up** (e.g. a button in the HELIX Mesh screen): build a TCP `connect` for
+`react-native-tcp-socket`, wrap the loaded model, and join the mesh —
+```ts
+import TcpSocket from 'react-native-tcp-socket'
+import { Llama } from '@lib/engine/Local/LlamaLocal'
+import { HelixAgentNode, makeLlamaAgentRunner } from '@lib/helixAgent'
+
+const connect = (host: string, port: number) => new Promise((res, rej) => {
+    const s = TcpSocket.createConnection({ host, port }, () => res(s as any)); s.on('error', rej)
+})
+const runner = makeLlamaAgentRunner(Llama.useLlamaModelStore.getState(),
+    { agent_id: 'phone-1', skills: ['chat'], task_types: ['chat'], models: ['local'] })
+const agent = new HelixAgentNode('phone-1', 'helix-agent-host-demo', runner)
+await agent.connect(connect, '<coordinator-ip>', 8790)   // then it answers TASKs from the mesh
+```
+
+**Run the coordinator** on a PC (same secret) and drive it from anywhere:
+```bash
+cd /path/to/SMS && PYTHONPATH=. python3 -m helix.host.agent_host_demo --host 0.0.0.0
+# TCP_PORT 8790  (point the phone agent here)   HTTP_PORT 8799 (POST prompts here once joined)
+curl -s localhost:8799/cmd -d '{"cmd":"infer","prompt":"hello from the mesh","mode":"single","skill":"chat"}'
+# -> the phone's model produces the answer
+```
+
 ## What this proves / what's next
 - **Proven here** (no device needed): the exact request/response path — a `fetch` client driving
   the real Python mesh over HTTP — passes `node integration/chatterui_llamacpp/js/http_smoke.mjs`
   (health / nodes / infer single·parallel·voting / super).
-- **Level 1** is the first experiment: ChatterUI ↔ HELIX mesh. **Level 2** (the phone's own GGUF
-  model joining the mesh as an *agent*) and **Level 3** (sharding one big model across phones) need
-  the native `SecurityBridge` / llama.cpp RPC — see `LEVEL3_sharding.md`. Their wires are already
-  proven cross-language (`js/agent_smoke.mjs`, `js/shard_smoke.mjs`, `js/heal_smoke.mjs`).
+- **Level 1** (above) is the quickest first experiment: ChatterUI ↔ HELIX mesh over `fetch`.
+- **Level 2** (the phone's model as an agent) needs **no native crypto** — pure-JS `@noble`
+  (proven, 19/19) + `react-native-tcp-socket`. Code is in `app_mod/lib/helix{Crypto,Frame,Agent}.ts`;
+  the loop is proven by `js/l2_host_smoke.mjs`. Wiring above.
+- **Level 3** (sharding one big model across phones) needs the native llama.cpp `GGML_RPC` build —
+  see `LEVEL3_sharding.md`. Its wires are already proven cross-language (`js/shard_smoke.mjs`,
+  `js/heal_smoke.mjs`).
 
 ## Licensing
 ChatterUI is **AGPL-3.0**; the combined app stays AGPL.

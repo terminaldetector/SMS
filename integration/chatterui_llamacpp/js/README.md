@@ -41,6 +41,20 @@ Six proofs, all runnable in plain Node, all green:
 
 ---
 
+## Pure-JS crypto (no native module) — `@noble`
+
+`helix_codec_noble.mjs` + `conformance_noble.mjs` reproduce `vectors.json` (19/19) using **pure-JS
+`@noble`** (ChaCha20-Poly1305 + Ed25519 + HKDF) — the same libraries that run in React Native. This
+is the crux de-risk for the **in-app Level 2 agent**: ChatterUI needs **no native `SecurityBridge`**.
+`l2_host_smoke.mjs` then proves the full first-experiment loop — an agent joins a coordinator over
+TCP and an HTTP-posted prompt is routed to it (`helix/host/agent_host_demo.py`). The app ships the
+TS twins `app_mod/lib/helix{Crypto,Frame,Agent}.ts`.
+
+```bash
+node integration/chatterui_llamacpp/js/conformance_noble.mjs   # ALL PASSED (19 checks)
+node integration/chatterui_llamacpp/js/l2_host_smoke.mjs        # ALL PASSED (5 checks)
+```
+
 ## Level 2 wire-compat gate (crypto + framing)
 
 The riskiest part of the ChatterUI **Level 2 (agent)** integration is proving a TS/JS

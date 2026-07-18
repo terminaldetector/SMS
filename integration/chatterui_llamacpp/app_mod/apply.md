@@ -56,9 +56,20 @@ See `../build-apk.sh` and `../README_MESH.md`. In short: run a HELIX node
 (`python -m helix.host.http_control --host 0.0.0.0`) on a PC/phone on the same Wi-Fi, build the
 APK, open **HELIX Mesh**, enter the node's `LAN-IP:8799`, Connect, then Run.
 
+## Level 2 (optional, next step): the phone's model as a mesh agent
+
+L1 above needs zero new deps. **Level 2** makes the phone a Track-A agent (its GGUF model answers
+mesh tasks) — still **no native crypto** (pure-JS `@noble`). Extra files: `app_mod/lib/helixCrypto.ts`,
+`helixFrame.ts`, `helixAgent.ts` → `lib/`. Extra deps:
+```bash
+npm i @noble/ciphers @noble/curves @noble/hashes react-native-tcp-socket react-native-get-random-values
+```
+Import `react-native-get-random-values` once at the top of `app/_layout.tsx`. Full wiring + a
+coordinator to test against (`helix.host.agent_host_demo`) are in `../README_MESH.md` (Level 2).
+
 ## Notes
-- No new dependency: the screen uses only `fetch`, `react-native-mmkv` (already a ChatterUI dep),
-  and existing `@components`.
+- L1 needs no new dependency: the screen uses only `fetch`, `react-native-mmkv` (already a
+  ChatterUI dep), and existing `@components`.
 - ChatterUI is **AGPL-3.0** — the combined app stays AGPL.
 - This is Level 1 (control-plane). Level 2 (the phone's model as a mesh *agent*) and Level 3
   (sharding) need the native `SecurityBridge` / RPC and are a later step.
