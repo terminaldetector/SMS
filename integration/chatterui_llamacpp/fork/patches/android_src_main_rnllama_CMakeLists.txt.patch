@@ -1,0 +1,21 @@
+diff --git a/android/src/main/rnllama/CMakeLists.txt b/android/src/main/rnllama/CMakeLists.txt
+index d9d0b1e..d8ab17f 100644
+--- a/android/src/main/rnllama/CMakeLists.txt
++++ b/android/src/main/rnllama/CMakeLists.txt
+@@ -39,6 +39,7 @@ set(
+     ${RNLLAMA_LIB_DIR}/ggml-backend-dl.cpp
+     ${RNLLAMA_LIB_DIR}/ggml-backend-meta.cpp
+     ${RNLLAMA_LIB_DIR}/ggml-backend-reg.cpp
++    ${RNLLAMA_LIB_DIR}/ggml-rpc.cpp   # HELIX L3: vendored from llama.cpp b9309 (scripts/vendor-ggml-rpc.sh)
+     ${RNLLAMA_LIB_DIR}/ggml-opt.cpp
+     ${RNLLAMA_LIB_DIR}/ggml-threading.cpp
+     ${RNLLAMA_LIB_DIR}/ggml-quants.c
+@@ -120,7 +121,7 @@ function(build_rnllama_library target_name arch cpu_flags)
+         target_compile_options(${target_name} PRIVATE -DLM_GGML_CPU_GENERIC)
+     endif ()
+ 
+-    target_compile_options(${target_name} PRIVATE -DLM_GGML_USE_CPU -DLM_GGML_USE_CPU_REPACK -pthread ${cpu_flags} -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE)
++    target_compile_options(${target_name} PRIVATE -DLM_GGML_USE_CPU -DLM_GGML_USE_CPU_REPACK -pthread -DLM_GGML_USE_RPC ${cpu_flags} -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE)
+ 
+     if (CMAKE_BUILD_TYPE AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+         target_compile_options(${target_name} PRIVATE -DRNLLAMA_ANDROID_ENABLE_LOGGING)

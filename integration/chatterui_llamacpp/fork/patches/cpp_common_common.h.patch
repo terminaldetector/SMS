@@ -1,0 +1,12 @@
+diff --git a/cpp/common/common.h b/cpp/common/common.h
+index 3242bc3..000562c 100644
+--- a/cpp/common/common.h
++++ b/cpp/common/common.h
+@@ -471,6 +471,7 @@ struct common_params {
+     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
+ 
+     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
++    std::string rpc_servers = ""; // HELIX L3: comma-separated host:port of llama.cpp RPC workers
+ 
+     common_cpu_params cpuparams;
+     common_cpu_params cpuparams_batch;

@@ -1,0 +1,23 @@
+diff --git a/cpp/jsi/JSIParams.cpp b/cpp/jsi/JSIParams.cpp
+index 6104703..64dfada 100644
+--- a/cpp/jsi/JSIParams.cpp
++++ b/cpp/jsi/JSIParams.cpp
+@@ -309,6 +309,18 @@ namespace rnllama_jsi {
+ #endif
+ 
+         cparams.n_gpu_layers = getPropertyAsInt(runtime, params, "n_gpu_layers", cparams.n_gpu_layers);
++        // HELIX Level 3 (llama.cpp RPC sharding): worker endpoints + layer split ratios.
++        cparams.rpc_servers = getPropertyAsString(runtime, params, "rpc_servers", cparams.rpc_servers);
++        if (params.hasProperty(runtime, "tensor_split")) {
++            auto tsVal = params.getProperty(runtime, "tensor_split");
++            if (tsVal.isObject() && tsVal.getObject(runtime).isArray(runtime)) {
++                auto arr = tsVal.getObject(runtime).getArray(runtime);
++                size_t n = std::min<size_t>(arr.size(runtime), 128);
++                for (size_t i = 0; i < n; i++) {
++                    cparams.tensor_split[i] = (float) arr.getValueAtIndex(runtime, i).getNumber();
++                }
++            }
++        }
+         if (!cpuMask.empty()) {
+             bool cpumask[LM_GGML_MAX_N_THREADS] = {false};
+             if (parse_cpu_mask(cpuMask, cpumask)) {

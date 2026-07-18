@@ -1,0 +1,14 @@
+diff --git a/android/src/main/CMakeLists.txt b/android/src/main/CMakeLists.txt
+index 3f64914..0ae4153 100644
+--- a/android/src/main/CMakeLists.txt
++++ b/android/src/main/CMakeLists.txt
+@@ -130,6 +130,9 @@ function(build_rnllama_jni jni_name rnllama_name arch cpu_flags)
+         target_compile_options(${jni_name} PRIVATE -DLM_GGML_USE_HEXAGON)
+     endif()
+ 
++    # HELIX L3: llama.cpp RPC sharding (see FORK_cui-llama-rpc.md)
++    target_compile_options(${jni_name} PRIVATE -DLM_GGML_USE_RPC)
++
+ 
+     # Optimize JNI wrapper
+     target_compile_options(${jni_name} PRIVATE -O3 -DNDEBUG)

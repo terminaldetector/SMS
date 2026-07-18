@@ -10,7 +10,8 @@
 // 1.11.14 / llama.cpp b9309) is in FORK_cui-llama-rpc.md. Until the fork exists, L3 does not run
 // on-device (L1 + L2 do).
 
-import { HelixClient, RpcClusterPlan } from './helixClient'
+import { HelixClient } from './helixClient'
+import type { RpcClusterPlan } from './helixClient'
 
 // The native surface a forked cui-llama.rn must provide (does not exist upstream yet).
 export interface NativeHelixRpc {
@@ -24,7 +25,7 @@ export interface RpcInitLlama {
     (params: {
         model: string
         n_gpu_layers?: number
-        rpc_servers?: string[] // llama.cpp --rpc list
+        rpc_servers?: string // llama.cpp --rpc list, "host:port,host:port" (matches plan.rpc_arg)
         tensor_split?: number[] // llama.cpp --tensor-split ratios
         [k: string]: unknown
     }): Promise<unknown>
@@ -51,12 +52,12 @@ export async function startShardMain(
 ): Promise<ShardWorkerHandle> {
     const plan = await client.rpcPlan(model)
     if (!plan.ok) throw new Error('rpc_plan failed (is the coordinator a ControlNode with rpc_addrs?)')
-    // llama.cpp: --rpc = the worker rpc-servers; --tensor-split spans [main-local, worker0, ...].
-    const workers = plan.rpc_arg ? plan.rpc_arg.split(',') : []
+    // llama.cpp: --rpc = the worker rpc-servers (plan.rpc_arg is already "host:port,host:port");
+    // --tensor-split spans [main-local, worker0, ...].
     await initLlama({
         model: model.model_path,
         n_gpu_layers: 99,
-        rpc_servers: workers,
+        rpc_servers: plan.rpc_arg,
         tensor_split: plan.tensor_split,
     })
     return {

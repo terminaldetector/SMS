@@ -1,0 +1,22 @@
+diff --git a/src/types.ts b/src/types.ts
+index 83ab25a..351cc06 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -71,6 +71,17 @@ export type NativeContextParams = {
+    */
+   n_gpu_layers?: number
+ 
++  /**
++   * HELIX L3: llama.cpp RPC worker endpoints, "host:port,host:port" (--rpc). Needs a fork of
++   * cui-llama.rn built with -DLM_GGML_USE_RPC. See FORK_cui-llama-rpc.md.
++   */
++  rpc_servers?: string
++
++  /**
++   * HELIX L3: layer split ratios across [local, rpc0, rpc1, ...] (--tensor-split).
++   */
++  tensor_split?: number[]
++
+   /**
+    * Backend devices choice to use. Default equals to result of `getBackendDevicesInfo.
+    */
