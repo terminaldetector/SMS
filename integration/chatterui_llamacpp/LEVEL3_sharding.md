@@ -80,7 +80,11 @@ it beyond LAN:
 - **Confidential + authenticated hops** — the int8 activation codec (`helix/activation.py`) under
   AEAD; replay-protected `ACTIVATION`/`FEED`/`SHARD_TOKEN`.
 - **Fine-grained healing/resume** — re-place over survivors and resume decode from the last token
-  (`helix/orchestrator.py` already does this against the reference `NumericShardRunner`).
+  (`helix/orchestrator.py`). **Proven cross-language:** `js/heal_smoke.mjs` runs a JS shard that
+  joins the control plane, is leased a band, contributes tokens, then **goes silent mid-generation**;
+  the Python orchestrator prunes it, re-places over the survivors, and resumes from the checkpoint —
+  the session completes with the *same* tokens as fault-free (`heals >= 1`). This is the resume
+  Option A cannot do (RPC restarts the whole run).
 
 The whole ring protocol is proven in Python (`helix/pipeline_selftest.py`: a real L3 placement →
 L4 ring → tokens that only match if every band ran) **and now cross-language in JS**: a JS shard

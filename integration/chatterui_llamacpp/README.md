@@ -59,7 +59,9 @@ JSI/TurboModule: ChaCha20-Poly1305 + Ed25519 + HKDF). Alternatively a **shared R
     + `startRpcServer`/`--rpc` methods.
   - *Option B (full HELIX ring):* a JS shard worker joins a real HELIX layer-shard ring and threads
     activations through its band (`js/shard_smoke.mjs`, tokens `[7,13,19]`); the activation codec is
-    pinned in `vectors.json`. Remaining: a native ggml `ShardRunner` behind the same seam.
+    pinned in `vectors.json`. **Self-healing proven** — a JS shard dies mid-generation and the ring
+    re-places over survivors + resumes from the checkpoint (`js/heal_smoke.mjs`). Remaining: a
+    native ggml `ShardRunner` behind the same seam.
   See `LEVEL3_sharding.md`.
 
 ## Licensing

@@ -65,10 +65,11 @@ ChatterUI — RN + llama.cpp (нативный C++), Python туда не вот
 **Вывод:** Уровни 1–2 доказаны end-to-end на реальном Python-меше (JS-клиент — 11/11; JS-агент
 входит в координатор и обслуживает все 4 режима — single/parallel/voting/pipeline), провод HELIX
 сверен с `vectors.json` (16/16); осталось обернуть llama.rn `completion` как `AgentRunner` +
-RN-транспорт. У **Уровня 3 доказаны оба провода** — Option A: HELIX отдаёт llama.cpp `--rpc`/`--tensor-split`
-(`js/rpc_smoke.mjs`, 7/7); Option B: JS-шард входит в реальное HELIX-кольцо и прогоняет активации
-через свою полосу (`js/shard_smoke.mjs`, `[7,13,19]`). Осталась только нативная тензорная часть
-(`GGML_RPC` или ggml-`ShardRunner`) — детали в `integration/chatterui_llamacpp/LEVEL3_sharding.md`.
+RN-транспорт. У **Уровня 3 доказаны оба провода + самолечение** — Option A: HELIX отдаёт llama.cpp
+`--rpc`/`--tensor-split` (`js/rpc_smoke.mjs`, 7/7); Option B: JS-шард входит в реальное HELIX-кольцо
+и прогоняет активации через свою полосу (`js/shard_smoke.mjs`, `[7,13,19]`), а при гибели узла
+кольцо переразмещается и **возобновляется с контрольной точки** (`js/heal_smoke.mjs`). Осталась
+только нативная тензорная часть — детали в `integration/chatterui_llamacpp/LEVEL3_sharding.md`.
 
 ## Карта репозитория
 

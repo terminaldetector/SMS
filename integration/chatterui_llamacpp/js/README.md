@@ -1,6 +1,6 @@
 # HELIX JS — the ChatterUI bring-up gates (green)
 
-Five proofs, all runnable in plain Node, all green:
+Six proofs, all runnable in plain Node, all green:
 
 - **Level 1 (client) — proven end-to-end.** `control_client.mjs` + `control_smoke.mjs` drive the
   **real** Python HELIX mesh over TCP (spawns `helix/host/control_demo.py`): ping / status /
@@ -21,6 +21,11 @@ Five proofs, all runnable in plain Node, all green:
   activations through its band (`FEED`/`ACTIVATION`/`SHARD_TOKEN` + activation codec, sealed
   frames) → tokens `[7,13,19]` (both bands ran). The tensor math is the numeric reference; a real
   node swaps in a native ggml `ShardRunner` behind the same seam.
+- **Level 3 — self-healing (②) proven end-to-end.** `heal_smoke.mjs` runs a JS control-shard node
+  that joins the control plane (ANNOUNCE/HEARTBEAT), is leased a band, runs it, then **goes silent
+  mid-generation**. The Python `Orchestrator` (`helix/host/heal_bridge_demo.py`) prunes it,
+  re-places over the survivors, and **resumes from the checkpoint token** → session COMPLETED with
+  fault-free tokens, `heals >= 1`.
 
 ## Files
 - **Level 1:** `control_client.mjs` (JSON-lines client, incl. `rpcPlan`) · `control_smoke.mjs`
@@ -30,7 +35,9 @@ Five proofs, all runnable in plain Node, all green:
   (end-to-end vs the real coordinator) · `conformance.mjs` (vectors gate).
 - **Level 3:** `rpc_smoke.mjs` (Option A: llama.cpp RPC plan from HELIX) · `activation.mjs`
   (raw + int8 codec) · `shard_node.mjs` (`ShardNode` ring worker + `NumericShardRunner`) ·
-  `shard_smoke.mjs` (Option B: JS shard joins the real ring). Native side in `../LEVEL3_sharding.md`.
+  `shard_smoke.mjs` (Option B: JS shard joins the real ring) · `control_shard_node.mjs`
+  (`ControlShardNode`: announce/heartbeat + lease-driven band + can go silent) · `heal_smoke.mjs`
+  (self-healing: JS shard dies → ring re-places + resumes). Native side in `../LEVEL3_sharding.md`.
 
 ---
 
@@ -70,6 +77,10 @@ node integration/chatterui_llamacpp/js/rpc_smoke.mjs
 # Level 3 Option B — JS shard worker joins a real HELIX ring and threads activations:
 node integration/chatterui_llamacpp/js/shard_smoke.mjs
 # -> ALL PASSED — JS shard joined the real HELIX ring and threaded 3 activations (Option B).
+
+# Level 3 self-healing — JS shard dies mid-generation; the ring re-places + resumes:
+node integration/chatterui_llamacpp/js/heal_smoke.mjs
+# -> ALL PASSED — JS shard died; the real HELIX ring healed + resumed (Option B).
 ```
 
 ## What this de-risks

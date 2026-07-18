@@ -21,6 +21,8 @@ export const PROTOCOL_VERSION = 1;
 // Message types used by the agent worker (Track A) and the shard ring (Track B). See
 // helix/message.py MsgType.
 export const Msg = {
+  // control plane (membership / leases / liveness)
+  ANNOUNCE: "ANNOUNCE", HEARTBEAT: "HEARTBEAT", LEASE: "LEASE", LEASE_ACK: "LEASE_ACK",
   // Track A (agent coordination)
   AGENT_ANNOUNCE: "AGENT_ANNOUNCE", STATUS: "STATUS", TASK: "TASK",
   PARTIAL: "PARTIAL", RESULT: "RESULT", VOTE: "VOTE", DECIDE: "DECIDE",
