@@ -1,0 +1,75 @@
+# Build the ChatterUI + HELIX mesh-mod APK (the vendored app lives in ./ChatterUI).
+# GitHub runners have the Android SDK + full internet, and cui-llama.rn ships prebuilt native libs,
+# so this prebuilds the Expo project and assembles an installable debug APK (no llama.cpp compile).
+# Actions -> "ChatterUI APK" -> Run workflow -> download the artifact.
+
+name: ChatterUI APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Gradle variant'
+        type: choice
+        default: assembleDebug
+        options: [assembleDebug, assembleRelease]
+  push:
+    paths: ['ChatterUI/**', '.github/workflows/chatterui-apk.yml']
+
+defaults:
+  run:
+    working-directory: ChatterUI
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform + NDK
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('ChatterUI/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Install JS dependencies
+        run: npm install   # patch-package postinstall; installs @noble/*, react-native-tcp-socket, etc.
+
+      - name: Expo prebuild (generate android/)
+        run: npx expo prebuild --platform android --clean
+
+      - name: Gradle build
+        working-directory: ChatterUI/android
+        run: ./gradlew ${{ github.event.inputs.variant || 'assembleDebug' }} --no-daemon
+
+      - name: Locate APK
+        id: apk
+        run: echo "path=$(find android/app/build/outputs/apk -name '*.apk' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterui-helix-apk
+          path: ChatterUI/${{ steps.apk.outputs.path }}
+          if-no-files-found: error
