@@ -65,6 +65,26 @@ are unchanged.
    the driver calls `startShardMain(client, initLlama, model)` which fetches `rpcPlan()` and inits
    the model with the RPC topology. See also `LlamaRpcCluster` in `helix.ts`.
 
+### Sharding you can run today (llama.cpp binaries — no app fork)
+
+You don't need the cui-llama.rn fork to *try* sharding: HELIX plans the topology and stock
+llama.cpp binaries (built with `-DGGML_RPC=ON`) do the tensor split. `helix/host/rpc_launch.py`
+turns a live plan into the exact commands:
+
+```bash
+# a HELIX coordinator (ControlNode with rpc addresses) is running on TCP <port>:
+python -m helix.host.rpc_launch --host <coord-ip> --port <port> \
+    --model-id big-16b --n-layers 80 --model-bytes 16000000000 --model-path /sdcard/big.gguf
+# ->  worker B:  rpc-server -H 0.0.0.0 -p 50052        (run on each worker device)
+#     worker C:  rpc-server -H 0.0.0.0 -p 50052
+#     main A:    llama-cli -m /sdcard/big.gguf -ngl 99 --rpc B:50052,C:50052 --tensor-split 0.5,0.33,0.17
+```
+
+Build llama.cpp per device (Termux on Android, or a Linux SBC) with `-DGGML_RPC=ON`; run the printed
+commands. HELIX supplies discovery + memory-weighted placement + attestation; llama.cpp does the
+tensors. This is the fastest route to a real "16B across N phones" demo, ahead of the in-app fork.
+(`python -m helix.host.rpc_launch --selftest` verifies the command builder.)
+
 ### Honest caveats (Option A)
 
 - **Data plane is llama.cpp's TCP RPC, not HELIX frames.** The tensor/activation hops are **not**

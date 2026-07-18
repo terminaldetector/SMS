@@ -38,7 +38,8 @@ jobs:
                    helix.mesh.router_selftest helix.host.control_server helix.control_selftest \
                    helix.pipeline_selftest helix.orchestrator_selftest helix.agent.selftest \
                    helix.agent.context_selftest helix.agent.secure_selftest helix.identity_selftest \
-                   helix.attest_selftest helix.super.selftest helix.rpc_cluster helix.host.bandwidth; do
+                   helix.attest_selftest helix.super.selftest helix.rpc_cluster \
+                   helix.host.bandwidth helix.host.rpc_launch; do
             echo "== $m =="; PYTHONPATH=. python3 -m "$m"
           done
 
