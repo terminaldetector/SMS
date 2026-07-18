@@ -41,17 +41,23 @@ or a fused SuperAgent). Pure `fetch`, **no new native module**.
 GitHub-hosted runners have the Android SDK and full internet, and `cui-llama.rn` ships prebuilt
 native libs, so CI builds the APK cleanly (it does not compile llama.cpp).
 
-1. On your ChatterUI fork's `helix-mesh-mod` branch, add the L2 deps so `npm ci` installs them:
-   ```bash
-   npm i @noble/ciphers @noble/curves @noble/hashes react-native-tcp-socket react-native-get-random-values
-   git commit -am "deps: HELIX mesh (@noble + tcp-socket + get-random-values)"
-   ```
-2. Copy [`ci/build-apk.yml`](ci/build-apk.yml) to `.github/workflows/build-apk.yml` in your fork and
-   push the branch.
-3. **Actions → Build APK → Run workflow** (or it runs on push to `helix-mesh-mod`). Download the APK
-   from the run's **Artifacts** (`chatterui-helix-apk`), then `adb install -r <apk>`.
+> **Build `assembleRelease`, not `assembleDebug`.** A debug RN/Expo APK does **not** embed the JS
+> bundle — it loads it from a Metro dev server, so installed standalone it **hangs on the splash
+> icon**. Release embeds the bundle and runs on its own; Expo's android template signs release with
+> the debug key, so **no signing secrets are needed**. (`newArchEnabled` is on — see below.)
 
-The workflow assembles a debug (installable) APK by default; choose `assembleRelease` from the
+> **Level 1 needs no native module** — the HELIX Mesh screen uses only `fetch` (`helixClient.ts`).
+> Add the L2 deps (`@noble/*`, `react-native-tcp-socket`, `react-native-get-random-values`) and the
+> `import 'react-native-get-random-values'` at the top of `app/_layout.tsx` **only when wiring the L2
+> agent** — adding new-arch native modules you don't need can break startup.
+
+1. Copy [`ci/build-apk.yml`](ci/build-apk.yml) to `.github/workflows/build-apk.yml` in your fork and
+   push the branch (it defaults to `assembleRelease`).
+2. **Actions → Build APK → Run workflow**. Download the APK from the run's **Artifacts**
+   (`chatterui-helix-apk`), then `adb install -r <apk>`.
+
+The workflow assembles a release (JS-bundled, installable) APK by default; choose `assembleDebug`
+only if you run a Metro dev server. Older note:
 Run-workflow inputs if you have signing configured.
 
 ## Run a first experiment

@@ -31,8 +31,6 @@
     "@noble/hashes": "^1.7.1",
     "@react-native-community/slider": "5.1.2",
     "@shopify/flash-list": "2.0.2",
-    "react-native-get-random-values": "~1.11.0",
-    "react-native-tcp-socket": "^6.2.0",
     "@vali98/react-native-cpu-info": "^0.2.0",
     "@vali98/react-native-fs": "^0.2.4",
     "@vali98/react-native-png-utils": "^0.1.2",

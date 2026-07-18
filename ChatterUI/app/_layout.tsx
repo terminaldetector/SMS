@@ -1,4 +1,3 @@
-import 'react-native-get-random-values' // HELIX L2: RNG polyfill for @noble crypto (must be first)
 import { SplashScreen, Stack } from 'expo-router'
 import { setOptions } from 'expo-splash-screen'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'

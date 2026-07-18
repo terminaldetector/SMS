@@ -13,10 +13,10 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: 'Gradle variant'
+        description: 'Gradle variant (release embeds JS + runs standalone; debug needs Metro)'
         type: choice
-        default: assembleDebug
-        options: [assembleDebug, assembleRelease]
+        default: assembleRelease
+        options: [assembleRelease, assembleDebug]
   push:
     branches: [helix-mesh-mod]
     paths-ignore: ['**/*.md']
@@ -65,7 +65,7 @@ jobs:
 
       - name: Gradle build
         working-directory: android
-        run: ./gradlew ${{ github.event.inputs.variant || 'assembleDebug' }} --no-daemon
+        run: ./gradlew ${{ github.event.inputs.variant || 'assembleRelease' }} --no-daemon
 
       - name: Locate APK
         id: apk

@@ -1,6 +1,10 @@
 # Build the ChatterUI + HELIX mesh-mod APK (the vendored app lives in ./ChatterUI).
 # GitHub runners have the Android SDK + full internet, and cui-llama.rn ships prebuilt native libs,
-# so this prebuilds the Expo project and assembles an installable debug APK (no llama.cpp compile).
+# so this prebuilds the Expo project and assembles an installable APK (no llama.cpp compile).
+#
+# Builds assembleRelease by default: a RELEASE APK EMBEDS the JS bundle and runs standalone. A debug
+# APK does NOT bundle JS (it needs a Metro dev server) — installed on a phone it hangs on the splash.
+# Expo's android template signs release with the debug key, so no signing secrets are needed.
 # Actions -> "ChatterUI APK" -> Run workflow -> download the artifact.
 
 name: ChatterUI APK
@@ -9,10 +13,10 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: 'Gradle variant'
+        description: 'Gradle variant (release embeds JS + runs standalone; debug needs Metro)'
         type: choice
-        default: assembleDebug
-        options: [assembleDebug, assembleRelease]
+        default: assembleRelease
+        options: [assembleRelease, assembleDebug]
   push:
     paths: ['ChatterUI/**', '.github/workflows/chatterui-apk.yml']
 
@@ -61,7 +65,7 @@ jobs:
 
       - name: Gradle build
         working-directory: ChatterUI/android
-        run: ./gradlew ${{ github.event.inputs.variant || 'assembleDebug' }} --no-daemon
+        run: ./gradlew ${{ github.event.inputs.variant || 'assembleRelease' }} --no-daemon
 
       - name: Locate APK
         id: apk
