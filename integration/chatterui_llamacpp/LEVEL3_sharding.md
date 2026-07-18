@@ -97,6 +97,26 @@ I/O) inside cui-llama.rn — a substantial C++ task, deferred until Option A is 
 behind the exact seam the JS `NumericShardRunner` fills (`embed` / `forward` a band / `sample` /
 `detok`); the ring, framing, codec, healing and transport around it are done.
 
+### Data-plane bandwidth (measured)
+
+`python -m helix.host.bandwidth` seals a **real** `ACTIVATION` frame per codec (activations
+round-tripped through float32, like a real engine), per token per inter-shard hop:
+
+| model / d_model | raw JSON | int8 b64 | int8/raw | int8 binary\* |
+|---|---|---|---|---|
+| ~1–3B / 2048 | 39.7 KB | 2.9 KB | 7.3% | 2.0 KB |
+| ~7–8B / 4096 | 79.3 KB | 5.6 KB | 7.1% | 4.1 KB |
+| ~13B / 5120 | 99.1 KB | 7.0 KB | 7.1% | 5.1 KB |
+| ~65–70B / 8192 | 158.5 KB | 11.1 KB | 7.0% | 8.2 KB |
+
+\* theoretical binary body (no base64) — the follow-up path; int8 b64 carries a ~33% base64 tax
+over it. **int8 is ~14× smaller than raw JSON** and is the practical default. Projected over a
+4-node ring (3 hops) at 20 tok/s decode, a 13B model needs **~3.3 Mb/s with int8** vs ~47.6 Mb/s
+raw — int8 sits comfortably inside real Wi-Fi (~100–300 Mb/s) and USB-OTG, while raw JSON strains
+Wi-Fi at large `d_model`. Prefill multiplies the per-token cost by `seq_len` (one bursty pass).
+Next lever if needed: a **binary activation body** (drops the base64 tax) behind the same
+`ActivationCodec` seam — no ring-driver change.
+
 ---
 
 ## Bring-up order
