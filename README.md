@@ -90,6 +90,7 @@ RN-транспорт. У **Уровня 3 доказаны оба провод�
 - `AUDIT_*.md` — аудит безопасности · `ROADMAP_mobile_ai_mesh.md` — план (Track A/B)
 - `HELIX_WIRE_SPEC.md` — спека провода · `POINTER_protocol.md` — дизайн агентного трека
 - `INTEGRATION_BRIEF.md` / `INTEGRATION_DETAIL.md` — как встраивать в хосты
+- `TEST_PLAN.md` — чек-лист тестирования (гейт в среде → железо, по фазам)
 - `helix/README.md` — детали пакета
 
 ## Запуск тестов
