@@ -1,14 +1,12 @@
 // HELIX agent worker for ChatterUI (Level 2) — the phone's GGUF model joins a HELIX mesh as a
-// Track A agent. Mirrors helix/agent/node.py (worker half), proven cross-language by
-// integration/chatterui_llamacpp/js/agent_smoke.mjs. Crypto/frame are pure JS (helixFrame.ts /
-// helixCrypto.ts, @noble) — no native module beyond the TCP transport.
+// Track A agent, over the built-in **WebSocket** (NO native module: React Native and Node both have
+// a global WebSocket). Mirrors helix/agent/node.py (worker half); proven end-to-end by
+// integration/chatterui_llamacpp/js/l2_ws_smoke.mjs. Crypto is pure JS (@noble); the nonce comes
+// from expo-crypto (already a ChatterUI dep) — see the makeExpoRandomBytes note below.
 //
-// Transport: react-native-tcp-socket (a standard autolinked native module — raw TCP to the mesh):
-//   npm i react-native-tcp-socket
-// The class is transport-agnostic (pass any connect() returning a socket-like object), so it is
-// testable without RN.
+// One binary WS message = one HELIX frame (WebSocket is message-framed, no length prefix).
 
-import { FrameCodec, Msg, StreamFramer, frameOut } from './helixFrame'
+import { FrameCodec, Msg, RandomBytes } from './helixFrame'
 import { sealerKey } from './helixCrypto'
 
 export interface AgentCard {
@@ -26,23 +24,6 @@ export interface AgentRunner {
     infer(prompt: string, context: string): AsyncIterable<string> // stream chunks
     score(prompt: string, result: string): number
 }
-
-// Duck-typed socket (react-native-tcp-socket TcpSocket, or a test double).
-export interface Sockish {
-    write(data: Uint8Array): void
-    on(event: 'data', cb: (data: Uint8Array | string) => void): void
-    on(event: 'error', cb: (err: Error) => void): void
-    on(event: 'close', cb: () => void): void
-    destroy(): void
-}
-export type Connect = (host: string, port: number) => Promise<Sockish>
-
-// Example wiring (react-native-tcp-socket):
-//   import TcpSocket from 'react-native-tcp-socket'
-//   const connect: Connect = (host, port) => new Promise((res, rej) => {
-//     const s = TcpSocket.createConnection({ host, port }, () => res(s as unknown as Sockish))
-//     s.on('error', rej)
-//   })
 
 const enc = new TextEncoder()
 
@@ -91,12 +72,17 @@ export function makeEchoRunner(card: AgentCard): AgentRunner {
     }
 }
 
+// Build a RandomBytes backed by expo-crypto (New-Architecture-safe; no react-native-get-random-values):
+//   import * as ExpoCrypto from 'expo-crypto'
+//   const rand = makeExpoRandomBytes(ExpoCrypto)
+export function makeExpoRandomBytes(expoCrypto: { getRandomValues: (a: Uint8Array) => Uint8Array }): RandomBytes {
+    return (n: number) => expoCrypto.getRandomValues(new Uint8Array(n))
+}
+
 export class HelixAgentNode {
     private codec: FrameCodec
     private card: AgentCard
-    private framer = new StreamFramer()
-    private gotHandshake = false
-    private sock: Sockish | null = null
+    private ws: WebSocket | null = null
     private announceTimer: ReturnType<typeof setInterval> | null = null
     tasksServed = 0
 
@@ -104,65 +90,65 @@ export class HelixAgentNode {
         private readonly nodeId: string,
         clusterSecret: string,
         private readonly runner: AgentRunner,
-        private readonly announceIntervalMs = 500
+        opts: { announceIntervalMs?: number; randomBytes?: RandomBytes } = {}
     ) {
-        this.codec = new FrameCodec(nodeId, sealerKey(clusterSecret))
+        this.codec = new FrameCodec(nodeId, sealerKey(clusterSecret), 0, true, opts.randomBytes)
         this.card = runner.card()
+        this.announceMs = opts.announceIntervalMs ?? 500
     }
 
-    async connect(connect: Connect, host: string, port: number): Promise<void> {
-        const sock = await connect(host, port)
-        sock.write(frameOut(enc.encode(this.nodeId))) // handshake: our id first
-        sock.on('data', (d) => this.onData(typeof d === 'string' ? enc.encode(d) : d))
-        sock.on('error', () => this.close())
-        sock.on('close', () => this.close())
-        this.sock = sock
-        this.announceTimer = setInterval(() => this.announce(), this.announceIntervalMs)
-        this.announce()
+    private announceMs: number
+
+    // url: "ws://<coordinator-ip>:<port>"
+    connect(url: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const ws = new WebSocket(url)
+            ws.binaryType = 'arraybuffer'
+            ws.onopen = () => {
+                ws.send(enc.encode(this.nodeId)) // handshake: our id first
+                this.announceTimer = setInterval(() => this.announce(), this.announceMs)
+                this.announce()
+                resolve()
+            }
+            ws.onmessage = (ev: MessageEvent) => this.onMessage(new Uint8Array(ev.data as ArrayBuffer))
+            ws.onerror = () => reject(new Error('websocket error'))
+            ws.onclose = () => this.close()
+            this.ws = ws
+        })
     }
 
-    private write(frame: Uint8Array) {
-        this.sock?.write(frameOut(frame))
+    private send(frame: Uint8Array) {
+        if (this.ws && this.ws.readyState === 1) this.ws.send(frame)
     }
 
     private announce() {
         const c = this.card
-        this.write(this.codec.seal(Msg.AGENT_ANNOUNCE, {
+        this.send(this.codec.seal(Msg.AGENT_ANNOUNCE, {
             agent_id: c.agent_id, models: c.models ?? [], skills: c.skills ?? [],
             task_types: c.task_types ?? [], mem: c.mem ?? 0, tps: c.tps ?? 0, batt: c.batt ?? 1.0,
         }))
-        this.write(this.codec.seal(Msg.STATUS, { busy: false }))
+        this.send(this.codec.seal(Msg.STATUS, { busy: false }))
     }
 
-    private onData(chunk: Uint8Array) {
-        for (const item of this.framer.push(chunk)) {
-            if ('bad' in item) {
-                this.close()
-                return
-            }
-            if (!this.gotHandshake) {
-                this.gotHandshake = true
-                continue
-            }
-            const msg = this.codec.open(item.frame)
-            if (msg && msg.type === Msg.TASK) void this.handleTask(msg.src, msg.tid, msg.body)
-        }
+    private onMessage(bytes: Uint8Array) {
+        const msg = this.codec.open(bytes)
+        if (msg && msg.type === Msg.TASK) void this.handleTask(msg.tid, msg.body)
     }
 
-    private async handleTask(coord: string, tid: string, body: Record<string, unknown>) {
+    private async handleTask(tid: string, body: Record<string, unknown>) {
         const mode = String(body.mode ?? 'single')
         const prompt = String(body.prompt ?? '')
         const context = String(body.context ?? '')
         const parts: string[] = []
         for await (const chunk of this.runner.infer(prompt, context)) {
             parts.push(chunk)
-            this.write(this.codec.seal(Msg.PARTIAL, { chunk }, tid))
+            this.send(this.codec.seal(Msg.PARTIAL, { chunk }, tid))
         }
         const result = parts.join('').trim()
         if (mode === 'voting') {
-            this.write(this.codec.seal(Msg.VOTE, { candidate: result, score: this.runner.score(prompt, result) }, tid))
+            this.send(this.codec.seal(Msg.VOTE, { candidate: result, score: this.runner.score(prompt, result) }, tid))
         } else {
-            this.write(this.codec.seal(Msg.RESULT, { text: result }, tid))
+            this.send(this.codec.seal(Msg.RESULT, { text: result }, tid))
         }
         this.tasksServed += 1
     }
@@ -172,9 +158,13 @@ export class HelixAgentNode {
             clearInterval(this.announceTimer)
             this.announceTimer = null
         }
-        if (this.sock) {
-            this.sock.destroy()
-            this.sock = null
+        if (this.ws) {
+            try {
+                this.ws.close()
+            } catch {
+                /* ignore */
+            }
+            this.ws = null
         }
     }
 }

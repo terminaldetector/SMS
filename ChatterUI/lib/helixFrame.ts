@@ -10,9 +10,14 @@ import {
     aeadSeal,
     concatBytes,
     encodeHeader,
-    randomBytes,
+    randomBytes as nobleRandomBytes,
     utf8ToBytes,
 } from './helixCrypto'
+
+// Source of a random nonce. Default @noble (works in Node/tests). In React Native, @noble's RNG
+// needs a global crypto polyfill; instead the app injects one backed by expo-crypto (already a
+// ChatterUI dep, New-Architecture-safe) — see helixAgent.ts. Signature: (n) => Uint8Array.
+export type RandomBytes = (n: number) => Uint8Array
 
 export const HEADER_LEN = 21
 export const MAX_FRAME = 16 * 1024 * 1024
@@ -91,19 +96,22 @@ class ReplayGuard {
 export class FrameCodec {
     private seq = 0
     private replay: ReplayGuard | null
+    private readonly rand: RandomBytes
 
     constructor(
         public readonly nodeId: string,
         private readonly key: Uint8Array,
         private readonly epoch = 0,
-        replay = true
+        replay = true,
+        rand: RandomBytes = nobleRandomBytes
     ) {
         this.replay = replay ? new ReplayGuard() : null
+        this.rand = rand
     }
 
     seal(type: string, body: Record<string, unknown> = {}, tid = ''): Uint8Array {
         this.seq += 1
-        const nonce = randomBytes(NONCE_LEN) // needs react-native-get-random-values imported at app entry
+        const nonce = this.rand(NONCE_LEN) // app injects expo-crypto; default @noble (Node/tests)
         const header = encodeHeader(FLAG_CONFIDENTIAL, this.epoch, nonce)
         const pt = serializeMessage({ t: type, seq: this.seq, src: this.nodeId, tid, b: body })
         return concatBytes(header, aeadSeal(this.key, nonce, pt, header))

@@ -1,10 +1,11 @@
-// HELIX Mesh screen (ChatterUI Level 1 / mesh mod) — ChatterUI as a UI over a HELIX node.
-//
-// Connect to a HELIX HTTP control node (helix/host/http_control.py) on the LAN, list the mesh
-// agents, and run a prompt across the mesh (single / parallel / voting, or a fused SuperAgent).
-// Uses only fetch (via @lib/helixClient) — no native module. First-experiments UI.
+// HELIX Mesh screen (ChatterUI mesh mod) — two roles:
+//   L1 (client): a UI over a HELIX node (helix/host/http_control.py) over fetch.
+//   L2 (agent):  this phone's loaded GGUF model JOINS the mesh as a Track-A agent over WebSocket
+//                (no native module: built-in WebSocket + @noble + expo-crypto nonce).
+// First-experiments UI.
 
-import React, { useMemo, useState } from 'react'
+import * as ExpoCrypto from 'expo-crypto'
+import React, { useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useMMKVString } from 'react-native-mmkv'
 
@@ -12,11 +13,25 @@ import ThemedButton from '@components/buttons/ThemedButton'
 import HorizontalSelector from '@components/input/HorizontalSelector'
 import ThemedTextInput from '@components/input/ThemedTextInput'
 import HeaderTitle from '@components/views/HeaderTitle'
+import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
+import { Llama } from '@lib/engine/Local/LlamaLocal'
 import { Logger } from '@lib/state/Logger'
+import { mmkv } from '@lib/storage/MMKV'
 import { Theme } from '@lib/theme/ThemeManager'
 
 const HOST_KEY = 'helix-mesh-host'
+const WS_KEY = 'helix-agent-ws'
+// Cluster secret — must match the coordinator (helix/host/agent_host_ws_demo.py).
+const AGENT_SECRET = 'helix-agent-host-ws-demo'
+
+function normalizeWs(input: string): string {
+    let s = (input || '').trim().replace(/\/+$/, '')
+    if (!s) return ''
+    if (!/^wss?:\/\//i.test(s)) s = 'ws://' + s
+    if (!/:\d+/.test(s.replace(/^wss?:\/\//i, ''))) s = s + ':8790'
+    return s
+}
 
 const HelixMeshScreen = () => {
     const styles = useStyles()
@@ -32,10 +47,65 @@ const HelixMeshScreen = () => {
     const [running, setRunning] = useState(false)
     const [result, setResult] = useState('')
 
+    // L2 agent state
+    const [wsUrl, setWsUrl] = useMMKVString(WS_KEY)
+    const [agentJoined, setAgentJoined] = useState(false)
+    const [agentJoining, setAgentJoining] = useState(false)
+    const agentRef = useRef<HelixAgentNode | null>(null)
+    const agentId = useMemo(() => {
+        const k = 'helix-agent-id'
+        let v = mmkv.getString(k)
+        if (!v) {
+            v = 'phone-' + ExpoCrypto.randomUUID().slice(0, 8)
+            mmkv.set(k, v)
+        }
+        return v
+    }, [])
+
     const client = useMemo(() => {
         const base = normalizeBaseUrl(host ?? '')
         return base ? new HelixClient(base) : null
     }, [host])
+
+    const onJoinAgent = async () => {
+        const url = normalizeWs(wsUrl ?? '')
+        if (!url) {
+            Logger.errorToast('Enter the coordinator address (e.g. 192.168.1.10:8790)')
+            return
+        }
+        const store = Llama.useLlamaModelStore.getState()
+        if (!store.context) {
+            Logger.errorToast('Load a model in ChatterUI first (Models), then join')
+            return
+        }
+        setAgentJoining(true)
+        try {
+            const runner = makeLlamaAgentRunner(store, {
+                agent_id: agentId,
+                skills: ['chat'],
+                task_types: ['chat'],
+                models: ['local'],
+            })
+            const node = new HelixAgentNode(agentId, AGENT_SECRET, runner, {
+                randomBytes: makeExpoRandomBytes(ExpoCrypto),
+            })
+            await node.connect(url)
+            agentRef.current = node
+            setAgentJoined(true)
+            Logger.infoToast(`Joined mesh as agent ${agentId}`)
+        } catch (e) {
+            Logger.errorToast(`Join failed: ${e instanceof Error ? e.message : String(e)}`)
+        } finally {
+            setAgentJoining(false)
+        }
+    }
+
+    const onLeaveAgent = () => {
+        agentRef.current?.close()
+        agentRef.current = null
+        setAgentJoined(false)
+        Logger.infoToast('Left the mesh')
+    }
 
     const onConnect = async () => {
         if (!client) {
@@ -153,10 +223,36 @@ const HelixMeshScreen = () => {
                 </View>
             )}
 
+            <View style={styles.agentBox}>
+                <Text style={styles.section}>Join as agent (this phone's model)</Text>
+                <Text style={styles.dim}>
+                    Share your loaded model with a mesh coordinator over WebSocket. Load a model in
+                    Models first.
+                </Text>
+                <ThemedTextInput
+                    label="Coordinator (ws host:port)"
+                    value={wsUrl ?? ''}
+                    onChangeText={setWsUrl}
+                    placeholder="192.168.1.10:8790"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    containerStyle={styles.gap}
+                />
+                <ThemedButton
+                    label={agentJoining ? 'Joining…' : agentJoined ? 'Leave mesh' : 'Join as agent'}
+                    variant={agentJoined ? 'critical' : 'primary'}
+                    onPress={agentJoined ? onLeaveAgent : onJoinAgent}
+                    buttonStyle={styles.gap}
+                />
+                {agentJoined && (
+                    <Text style={styles.node}>● online as {agentId} — answering mesh tasks</Text>
+                )}
+            </View>
+
             <Text style={styles.help}>
-                Run a HELIX node on your PC/phone: {'\n'}
-                python -m helix.host.http_control --host 0.0.0.0{'\n'}
-                then enter its LAN IP above. Same mesh, driven from the app.
+                On a PC in the same Wi-Fi: {'\n'}
+                • L1 (drive the mesh): python -m helix.host.http_control --host 0.0.0.0{'\n'}
+                • L2 (use this phone as an agent): python -m helix.host.agent_host_ws_demo --host 0.0.0.0
             </Text>
         </ScrollView>
     )
@@ -183,6 +279,12 @@ const useStyles = () => {
             borderColor: color.primary._300,
         },
         result: { color: color.text._100 },
+        agentBox: {
+            marginTop: spacing.xl2,
+            paddingTop: spacing.l,
+            borderTopWidth: 1,
+            borderTopColor: color.neutral._300,
+        },
         help: { color: color.text._500, marginTop: spacing.xl2, fontSize: fontSize.s },
     })
 }
