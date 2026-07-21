@@ -17,6 +17,7 @@
 package com.saturnmask.gallery.ui.theme
 
 import android.app.Activity
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,7 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.saturnmask.gallery.proto.Theme
@@ -298,11 +300,21 @@ fun GalleryTheme(content: @Composable () -> Unit) {
   }
 
   // Make sure the navigation bar stays transparent on manual theme changes.
-  LaunchedEffect(darkTheme) {
+  //
+  // Also force the Activity window background to follow the *effective* Compose
+  // theme. The XML activity theme's windowBackground is resolved from the system
+  // uiMode (values vs. values-night) only, so when the user picks a dark in-app
+  // theme override while the system is still in light mode the window stays white
+  // and shows through behind Compose (e.g. the chat/message area rendered blank
+  // white in dark mode). Setting it here keeps the window in sync with the theme.
+  val windowBackgroundColor = colorScheme.background.toArgb()
+  LaunchedEffect(darkTheme, windowBackgroundColor) {
     val window = (view.context as Activity).window
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       window.isNavigationBarContrastEnforced = false
     }
+
+    window.setBackgroundDrawable(ColorDrawable(windowBackgroundColor))
   }
 }
