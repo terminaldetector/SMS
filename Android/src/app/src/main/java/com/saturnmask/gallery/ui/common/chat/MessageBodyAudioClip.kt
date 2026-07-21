@@ -28,6 +28,8 @@ fun MessageBodyAudioClip(message: ChatMessageAudioClip, modifier: Modifier = Mod
     sampleRate = message.sampleRate,
     isRecording = false,
     modifier = Modifier.padding(end = 16.dp),
-    onDarkBg = true,
+    // The user bubble is now a light tonal Material 3 container, so rely on
+    // theme-aware content colors instead of forcing white-on-dark.
+    onDarkBg = false,
   )
 }

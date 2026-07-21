@@ -178,9 +178,12 @@ val lightCustomColors =
       ),
     taskIconShapeBgColor = Color.White,
     homeBottomGradient = listOf(Color(0x00F8F9FF), Color(0xffFFEFC9)),
-    agentBubbleBgColor = Color(0xFFe9eef6),
-    userBubbleBgColor = Color(0xFF32628D),
-    linkColor = Color(0xFF32628D),
+    // Minimalist Material Design 3 chat surfaces: a soft neutral tint for the
+    // agent side and a light tonal primary container for the user side, instead
+    // of a heavy saturated fill.
+    agentBubbleBgColor = surfaceContainerHighLight,
+    userBubbleBgColor = primaryContainerLight,
+    linkColor = Color(0xFF0B57D0),
     successColor = Color(0xff3d860b),
     recordButtonBgColor = Color(0xFFEE675C),
     waveFormBgColor = Color(0xFFaaaaaa),
@@ -233,8 +236,10 @@ val darkCustomColors =
       ),
     taskIconShapeBgColor = Color(0xFF202124),
     homeBottomGradient = listOf(Color(0x00F8F9FF), Color(0x1AF6AD01)),
-    agentBubbleBgColor = Color(0xFF1b1c1d),
-    userBubbleBgColor = Color(0xFF1f3760),
+    // Minimalist Material Design 3 chat surfaces (dark): neutral tint for the
+    // agent side, tonal primary container for the user side.
+    agentBubbleBgColor = surfaceContainerHighDark,
+    userBubbleBgColor = primaryContainerDark,
     linkColor = Color(0xFF9DCAFC),
     successColor = Color(0xFFA1CE83),
     recordButtonBgColor = Color(0xFFEE675C),

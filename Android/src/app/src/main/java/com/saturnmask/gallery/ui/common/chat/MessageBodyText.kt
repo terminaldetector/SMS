@@ -22,7 +22,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -43,12 +42,13 @@ fun MessageBodyText(
   onCopyClicked: (String) -> Unit = {},
 ) {
   if (message.side == ChatSide.USER) {
+    val userBubbleTextColor = MaterialTheme.colorScheme.onPrimaryContainer
     LongPressCopyContainer(copyText = message.content, onCopyClicked = onCopyClicked) {
       MarkdownText(
         text = message.content,
         modifier = Modifier.padding(vertical = 12.dp).padding(horizontal = horizontalPadding),
-        textColor = Color.White,
-        linkColor = Color.White,
+        textColor = userBubbleTextColor,
+        linkColor = userBubbleTextColor,
       )
     }
   } else if (message.side == ChatSide.AGENT) {
