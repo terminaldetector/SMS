@@ -148,6 +148,10 @@ fun ChatPanel(
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
   emptyStateComposable: @Composable (Model) -> Unit = {},
+  // Rendered as a slim row directly above the message input (e.g. the agent Skills/RAG/Web-search
+  // icon toggles). Kept next to the input on purpose so the controls read as part of composing a
+  // message rather than a separate banner floating at the top of the screen.
+  composableAboveMessageInput: @Composable (Model) -> Unit = {},
   onFilePicked: (Uri) -> Unit = {},
 ) {
   val uiState by viewModel.uiState.collectAsState()
@@ -672,6 +676,9 @@ fun ChatPanel(
 
       val modelNotSupportImageMsg = stringResource(R.string.model_not_support_image_message)
       val modelNotSupportAudioMsg = stringResource(R.string.model_not_support_audio_message)
+
+      // Slim controls row (Skills/RAG/Web-search toggles) sitting right above the input.
+      composableAboveMessageInput(selectedModel)
 
       MessageInputText(
         task = task,

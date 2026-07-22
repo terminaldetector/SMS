@@ -321,11 +321,6 @@ fun ChatView(
             Column(
               modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
             ) {
-              // Pinned toolbar row (Skills/RAG/Web-search chips, Coder's folder picker) — always
-              // visible right under the top app bar, never part of the message-list's
-              // scrollable/leftover-space region below, regardless of model-download status.
-              composableBelowMessageList(selectedModel)
-
               AnimatedContent(
                 targetState = curModelDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
               ) { targetState ->
@@ -365,6 +360,7 @@ fun ChatView(
                       showImagePicker = showImagePicker,
                       showAudioPicker = showAudioPicker,
                       emptyStateComposable = emptyStateComposable,
+                      composableAboveMessageInput = composableBelowMessageList,
                       onFilePicked = onFilePicked,
                     )
                   // Model download

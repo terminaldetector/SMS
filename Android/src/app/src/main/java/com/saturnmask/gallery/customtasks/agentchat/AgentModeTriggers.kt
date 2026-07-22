@@ -16,16 +16,15 @@
 
 package com.saturnmask.gallery.customtasks.agentchat
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.MenuBook
@@ -33,18 +32,15 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -52,33 +48,29 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
- * The "triggers" row from the interface roadmap: Actions / RAG mode toggles on a single unified
- * chat screen, instead of separate tabs.
+ * The agent "triggers" (Skills / RAG / Web search) rendered as a compact, minimalist Material
+ * Design 3 icon-toggle row that lives right next to the message input, instead of the earlier
+ * bulky two-line chip row that sat at the top of the screen above the message list.
  *
- * v2: replaces the plain single-line [androidx.compose.material3.FilterChip]s from the first
- * pass with a two-line status chip — a bold on/off label plus a small caption line — because
- * user feedback was that a small chip in a row of controls doesn't communicate *what's actually
- * active* at a glance (e.g. "RAG is on, but did I actually index anything?"). Standard Material3
- * `FilterChip` only has room for one line of text, so this is a small custom `Surface`-based
- * toggle instead — same selection semantics (`Modifier.selectable`), same color tokens
- * (`MaterialTheme.colorScheme`), so it doesn't introduce a new visual language, just a taller one.
+ * Each control is a single circular icon toggle:
+ * - tap toggles the feature on/off (filled tonal when on, quiet when off);
+ * - long-press opens that feature's settings sheet (Skills / RAG / Web search).
  *
- * Reasoning is deliberately NOT one of these chips — see the original rationale this comment
- * replaces: it's driven by the pre-existing native "Enable thinking" per-model switch
- * (`ConfigKeys.ENABLE_THINKING`). That's unchanged by this pass.
+ * Skills settings also cover MCP tools and Mobile Actions (the unified Skills sheet), so the whole
+ * RAG / Web search / MCP / Agent-actions system is reachable from these three icons.
+ *
+ * Reasoning is deliberately NOT one of these — it's driven by the pre-existing native "Enable
+ * thinking" per-model switch (`ConfigKeys.ENABLE_THINKING`).
  */
 @Composable
 fun AgentModeTriggers(
   actionsEnabled: Boolean,
   ragEnabled: Boolean,
   onActionsToggled: (Boolean) -> Unit,
-  // Opens the unified Skills sheet (SkillsManagerBottomSheet) — the gear icon zone of the chip,
-  // independent from the main body's direct on/off tap zone. See the roadmap "Skills" merge.
+  // Opens the unified Skills sheet (SkillsManagerBottomSheet) — long-press on the Skills icon.
   onSkillsSettingsClicked: () -> Unit,
   onRagToggled: (Boolean) -> Unit,
-  // Opens the consolidated RAG settings sheet (RagManagerBottomSheet) via the chip's gear icon —
-  // the main body now toggles ragEnabled directly instead of only opening the sheet. See the
-  // roadmap "RAG/Web Search promotion" pass.
+  // Opens the consolidated RAG settings sheet (RagManagerBottomSheet) — long-press on the RAG icon.
   onRagSettingsClicked: () -> Unit,
   webSearchEnabled: Boolean,
   webSearchCaption: String,
@@ -93,74 +85,114 @@ fun AgentModeTriggers(
   ragIndexing: Boolean = false,
   // Chunk-level progress while ragIndexing is true — see RagManagerViewModel.importProgress.
   // total == 0 means "no per-chunk progress yet" (still parsing/loading a model), shown as a
-  // plain "Indexing…" instead of a fraction.
+  // plain spinner instead of a fraction.
   ragIndexingDone: Int = 0,
   ragIndexingTotal: Int = 0,
 ) {
   Row(
-    modifier = modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    modifier = modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    TriggerChip(
+    TriggerIconToggle(
       selected = actionsEnabled,
-      onClick = { onActionsToggled(!actionsEnabled) },
-      onSettingsClick = onSkillsSettingsClicked,
-      label = "Skills",
-      caption = skillsCaption(actionsEnabled, skillCount, mcpToolsCount, mobileActionsEnabled),
+      onToggle = { onActionsToggled(!actionsEnabled) },
+      onSettings = onSkillsSettingsClicked,
       iconSelected = Icons.Filled.Bolt,
       iconUnselected = Icons.Outlined.Bolt,
       contentDescription =
-        "Skills ${if (actionsEnabled) "enabled" else "disabled"}. Tap to " +
-          (if (actionsEnabled) "disable" else "enable") +
-          ", or use the settings button to manage skills, MCP servers, and Mobile Actions.",
+        "Skills ${if (actionsEnabled) "enabled" else "disabled"} " +
+          "(${skillsCaption(actionsEnabled, skillCount, mcpToolsCount, mobileActionsEnabled)}). " +
+          "Tap to toggle, long-press to manage skills, MCP servers, and Mobile Actions.",
     )
 
-    TriggerChip(
+    TriggerIconToggle(
       selected = ragEnabled,
-      onClick = { onRagToggled(!ragEnabled) },
-      onSettingsClick = onRagSettingsClicked,
-      label = "RAG",
-      caption =
-        ragCaption(ragEnabled, ragDocumentCount, ragChunkCount, ragIndexing, ragIndexingDone, ragIndexingTotal),
+      onToggle = { onRagToggled(!ragEnabled) },
+      onSettings = onRagSettingsClicked,
       iconSelected = Icons.Filled.MenuBook,
       iconUnselected = Icons.Outlined.MenuBook,
-      trailing = {
-        AnimatedVisibility(visible = ragIndexing, enter = fadeIn(), exit = fadeOut()) {
-          if (ragIndexingTotal > 0) {
-            CircularProgressIndicator(
-              progress = { ragIndexingDone.toFloat() / ragIndexingTotal },
-              modifier = Modifier.size(12.dp),
-              strokeWidth = 1.5.dp,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-          } else {
-            CircularProgressIndicator(
-              modifier = Modifier.size(12.dp),
-              strokeWidth = 1.5.dp,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-          }
-        }
-      },
+      showProgress = ragIndexing,
+      progress =
+        if (ragIndexing && ragIndexingTotal > 0) ragIndexingDone.toFloat() / ragIndexingTotal
+        else null,
       contentDescription =
-        "R A G ${if (ragEnabled) "enabled" else "disabled"}, " +
-          "$ragDocumentCount documents, $ragChunkCount chunks indexed" +
-          (if (ragIndexing) ", currently indexing $ragIndexingDone of $ragIndexingTotal chunks" else "") +
-          ". Tap to toggle, or use the settings button to open RAG settings.",
+        "R A G ${if (ragEnabled) "enabled" else "disabled"} " +
+          "(${ragCaption(ragEnabled, ragDocumentCount, ragChunkCount, ragIndexing, ragIndexingDone, ragIndexingTotal)}). " +
+          "Tap to toggle, long-press for RAG settings.",
     )
 
-    TriggerChip(
+    TriggerIconToggle(
       selected = webSearchEnabled,
-      onClick = { onWebSearchToggled(!webSearchEnabled) },
-      onSettingsClick = onWebSearchSettingsClicked,
-      label = "Web search",
-      caption = webSearchCaption,
+      onToggle = { onWebSearchToggled(!webSearchEnabled) },
+      onSettings = onWebSearchSettingsClicked,
       iconSelected = Icons.Filled.Search,
       iconUnselected = Icons.Outlined.Search,
       contentDescription =
-        "Web search ${if (webSearchEnabled) "enabled" else "disabled"}. Tap to toggle, or use the " +
-          "settings button to open web search settings.",
+        "Web search ${if (webSearchEnabled) "enabled" else "disabled"} ($webSearchCaption). " +
+          "Tap to toggle, long-press for web search settings.",
     )
+  }
+}
+
+/**
+ * A single circular Material 3 icon toggle: filled-tonal container when selected, quiet/transparent
+ * when not. Tap toggles; long-press opens settings. An optional small progress ring is overlaid for
+ * the RAG indexing state.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TriggerIconToggle(
+  selected: Boolean,
+  onToggle: () -> Unit,
+  onSettings: () -> Unit,
+  iconSelected: ImageVector,
+  iconUnselected: ImageVector,
+  contentDescription: String,
+  modifier: Modifier = Modifier,
+  showProgress: Boolean = false,
+  progress: Float? = null,
+) {
+  val containerColor =
+    if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+  val contentColor =
+    if (selected) MaterialTheme.colorScheme.onSecondaryContainer
+    else MaterialTheme.colorScheme.onSurfaceVariant
+
+  Box(
+    modifier =
+      modifier
+        .size(40.dp)
+        .clip(CircleShape)
+        .background(containerColor)
+        .combinedClickable(onClick = onToggle, onLongClick = onSettings)
+        .semantics {
+          role = Role.Switch
+          this.contentDescription = contentDescription
+        },
+    contentAlignment = Alignment.Center,
+  ) {
+    Icon(
+      imageVector = if (selected) iconSelected else iconUnselected,
+      contentDescription = null,
+      tint = contentColor,
+      modifier = Modifier.size(20.dp),
+    )
+    if (showProgress) {
+      if (progress != null) {
+        CircularProgressIndicator(
+          progress = { progress },
+          modifier = Modifier.size(34.dp),
+          strokeWidth = 2.dp,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      } else {
+        CircularProgressIndicator(
+          modifier = Modifier.size(34.dp),
+          strokeWidth = 2.dp,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
+    }
   }
 }
 
@@ -192,80 +224,4 @@ private fun skillsCaption(
   if (mcpToolsCount > 0) parts.add("$mcpToolsCount MCP tool${if (mcpToolsCount == 1) "" else "s"}")
   if (mobileActionsEnabled) parts.add("Mobile Actions")
   return if (parts.isEmpty()) "Tools enabled" else parts.joinToString(" · ")
-}
-
-/**
- * A two-line, tap-target-friendly toggle with two independently-tappable zones in one `Surface`:
- * the icon+label+caption body (tap to toggle on/off directly) and a small trailing gear button
- * (tap to open the feature's settings sheet) — the roadmap's "one-click gear-icon access to
- * settings" pass replacing the earlier design where RAG/Web Search chips only opened a sheet and
- * never toggled directly. Filled background + border when selected so the on/off state reads
- * clearly even at a glance.
- */
-@Composable
-private fun TriggerChip(
-  selected: Boolean,
-  onClick: () -> Unit,
-  onSettingsClick: () -> Unit,
-  label: String,
-  caption: String,
-  iconSelected: androidx.compose.ui.graphics.vector.ImageVector,
-  iconUnselected: androidx.compose.ui.graphics.vector.ImageVector,
-  contentDescription: String,
-  modifier: Modifier = Modifier,
-  trailing: @Composable (() -> Unit)? = null,
-) {
-  val containerColor =
-    if (selected) MaterialTheme.colorScheme.secondaryContainer
-    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-  val contentColor =
-    if (selected) MaterialTheme.colorScheme.onSecondaryContainer
-    else MaterialTheme.colorScheme.onSurfaceVariant
-  val borderColor =
-    if (selected) MaterialTheme.colorScheme.secondary else Color.Transparent
-
-  Surface(
-    modifier = modifier,
-    shape = RoundedCornerShape(14.dp),
-    color = containerColor,
-    contentColor = contentColor,
-    border = BorderStroke(1.dp, borderColor),
-    tonalElevation = if (selected) 2.dp else 0.dp,
-  ) {
-    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-      Row(
-        modifier =
-          Modifier.semantics { role = Role.Switch; this.contentDescription = contentDescription }
-            .selectable(selected = selected, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Icon(
-          imageVector = if (selected) iconSelected else iconUnselected,
-          contentDescription = null, // described on the toggle body above instead
-          modifier = Modifier.size(18.dp),
-        )
-        Column {
-          Text(text = label, style = MaterialTheme.typography.labelLarge)
-          Text(
-            text = caption,
-            style = MaterialTheme.typography.labelSmall,
-            color = contentColor.copy(alpha = 0.85f),
-          )
-        }
-        trailing?.invoke()
-      }
-
-      VerticalDivider(modifier = Modifier.padding(vertical = 8.dp).size(width = 1.dp, height = 20.dp))
-
-      IconButton(onClick = onSettingsClick, modifier = Modifier.size(36.dp)) {
-        Icon(
-          imageVector = Icons.Outlined.Settings,
-          contentDescription = "$label settings",
-          modifier = Modifier.size(16.dp),
-        )
-      }
-    }
-  }
 }
