@@ -274,6 +274,7 @@ fun ChatView(
       CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Scaffold(
           modifier = modifier,
+          containerColor = MaterialTheme.colorScheme.surface,
           snackbarHost = { SnackbarHost(snackbarHostState) },
           topBar = {
             ModelPageAppBar(

@@ -356,10 +356,13 @@ fun ChatPanel(
       Box(
         contentAlignment = Alignment.BottomCenter,
         modifier =
-          Modifier.weight(1f).onSizeChanged {
-            // Update the viewport height when the size of the box changes.
-            viewportHeightPx = it.height
-          },
+          Modifier.weight(1f)
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .onSizeChanged {
+              // Update the viewport height when the size of the box changes.
+              viewportHeightPx = it.height
+            },
       ) {
         val cdChatPanel = stringResource(R.string.cd_chat_panel)
         Column(
