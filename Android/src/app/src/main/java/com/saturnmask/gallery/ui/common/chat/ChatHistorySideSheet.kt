@@ -45,6 +45,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MultiChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.saturnmask.gallery.R
+import com.saturnmask.gallery.proto.Theme
 
 @Composable
 fun ChatHistorySideSheetContent(
@@ -69,6 +73,8 @@ fun ChatHistorySideSheetContent(
   onHistoryItemsDeleteAll: () -> Unit,
   onNewChatClicked: () -> Unit,
   onDismissed: () -> Unit,
+  currentTheme: Theme = Theme.THEME_AUTO,
+  onThemeSelected: (Theme) -> Unit = {},
 ) {
   var showConfirmDeleteDialog by remember { mutableStateOf(false) }
   var itemToDelete by remember { mutableStateOf<String?>(null) }
@@ -106,15 +112,37 @@ fun ChatHistorySideSheetContent(
       }
     }
 
-    // Settings groundwork: this right, swipe-in menu is where upcoming settings will live.
-    // The rows below are placeholders wired for future screens.
+    // Settings section (swipe-in right menu). Theme is live; the rest are groundwork ("Soon").
     Text(
       "Settings",
       style = MaterialTheme.typography.titleSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(bottom = 4.dp),
+      modifier = Modifier.padding(bottom = 8.dp),
     )
-    SettingsStubRow(icon = Icons.Rounded.Palette, label = "Appearance")
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp, horizontal = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Rounded.Palette,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(20.dp),
+      )
+      Text("Theme", style = MaterialTheme.typography.bodyMedium)
+    }
+    val themeOptions = listOf(Theme.THEME_AUTO, Theme.THEME_LIGHT, Theme.THEME_DARK)
+    MultiChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+      themeOptions.forEachIndexed { index, theme ->
+        SegmentedButton(
+          shape = SegmentedButtonDefaults.itemShape(index = index, count = themeOptions.size),
+          checked = theme == currentTheme,
+          onCheckedChange = { onThemeSelected(theme) },
+          label = { Text(themeLabel(theme)) },
+        )
+      }
+    }
     SettingsStubRow(icon = Icons.Rounded.Notifications, label = "Notifications")
     SettingsStubRow(icon = Icons.Rounded.Tune, label = "Advanced")
     Spacer(modifier = Modifier.size(12.dp))
@@ -244,6 +272,13 @@ fun ChatHistorySideSheetContent(
     )
   }
 }
+
+private fun themeLabel(theme: Theme): String =
+  when (theme) {
+    Theme.THEME_LIGHT -> "Light"
+    Theme.THEME_DARK -> "Dark"
+    else -> "System"
+  }
 
 /**
  * A single row in the future "Settings" section of the right swipe-in menu. Non-interactive

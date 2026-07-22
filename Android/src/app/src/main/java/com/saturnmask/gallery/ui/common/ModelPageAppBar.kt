@@ -17,14 +17,12 @@
 package com.saturnmask.gallery.ui.common
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -143,18 +141,13 @@ fun ModelPageAppBar(
     actions = {
       val downloadSucceeded = curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
       val showConfigButton = model.configs.isNotEmpty() && downloadSucceeded
-      Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        var configButtonOffset = 0.dp
-        if (showConfigButton && shouldShowHistoryButton) {
-          configButtonOffset = (-40).dp
-        }
+      Row(verticalAlignment = Alignment.CenterVertically) {
         if (showConfigButton) {
           val enableConfigButton = !isModelInitializing && !inProgress && isModelInitialized
           IconButton(
             onClick = { showConfigDialog = true },
             enabled = enableConfigButton,
-            modifier =
-              Modifier.offset(x = configButtonOffset).alpha(if (!enableConfigButton) 0.5f else 1f),
+            modifier = Modifier.alpha(if (!enableConfigButton) 0.5f else 1f),
           ) {
             Icon(
               imageVector = Icons.Rounded.Tune,
@@ -164,19 +157,16 @@ fun ModelPageAppBar(
             )
           }
         }
-        if (downloadSucceeded && shouldShowHistoryButton) {
-          val enableHistoryButton =
-            !isModelInitializing && !modelPreparing && !inProgress && isModelInitialized
-          IconButton(
-            onClick = { onHistoryClicked(model) },
-            enabled = enableHistoryButton,
-            modifier = Modifier.alpha(if (!enableHistoryButton) 0.5f else 1f),
-          ) {
+        // Burger menu (top-right): opens the right side drawer that hosts chat history and the
+        // app settings (theme, etc.). Always available so the theme switch is reachable even
+        // before the model finishes initializing.
+        if (shouldShowHistoryButton) {
+          IconButton(onClick = { onHistoryClicked(model) }) {
             Icon(
-              imageVector = Icons.Rounded.History,
+              imageVector = Icons.Rounded.Menu,
               contentDescription = stringResource(R.string.cd_chat_history),
               tint = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.size(20.dp),
+              modifier = Modifier.size(24.dp),
             )
           }
         }

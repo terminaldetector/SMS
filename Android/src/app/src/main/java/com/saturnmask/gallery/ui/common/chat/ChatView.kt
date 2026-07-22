@@ -21,6 +21,8 @@ package com.saturnmask.gallery.ui.common.chat
 // import com.saturnmask.gallery.ui.preview.TASK_TEST1
 // import com.saturnmask.gallery.ui.theme.GalleryTheme
 
+import android.app.UiModeManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
@@ -86,8 +88,10 @@ import com.saturnmask.gallery.ui.common.ModelPageAppBar
 import com.saturnmask.gallery.ui.common.copyBitmapToClipboard
 import com.saturnmask.gallery.ui.common.saveBitmapToMediaStore
 import com.saturnmask.gallery.ui.common.shareBitmap
+import com.saturnmask.gallery.proto.Theme
 import com.saturnmask.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.saturnmask.gallery.ui.modelmanager.ModelManagerViewModel
+import com.saturnmask.gallery.ui.theme.ThemeSettings
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -265,6 +269,24 @@ fun ChatView(
                 scope.launch { drawerState.close() }
               },
               onDismissed = { scope.launch { drawerState.close() } },
+              currentTheme = ThemeSettings.themeOverride.value,
+              onThemeSelected = { theme ->
+                // Make the app's own theme authoritative. On light system + OEM "force dark",
+                // the app otherwise renders light and the ROM inverts it inconsistently (white
+                // chat area). Setting the app night mode fixes that at the OS level.
+                ThemeSettings.themeOverride.value = theme
+                modelManagerViewModel.saveThemeOverride(theme)
+                val uiModeManager =
+                  context.applicationContext.getSystemService(Context.UI_MODE_SERVICE)
+                    as UiModeManager
+                when (theme) {
+                  Theme.THEME_LIGHT ->
+                    uiModeManager.setApplicationNightMode(UiModeManager.MODE_NIGHT_NO)
+                  Theme.THEME_DARK ->
+                    uiModeManager.setApplicationNightMode(UiModeManager.MODE_NIGHT_YES)
+                  else -> uiModeManager.setApplicationNightMode(UiModeManager.MODE_NIGHT_AUTO)
+                }
+              },
             )
           }
         }
