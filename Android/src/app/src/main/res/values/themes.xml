@@ -20,6 +20,11 @@
       <!-- Day/night aware so the window background is dark in dark mode instead of
            staying white (surfaceLight) and showing through behind Compose. -->
       <item name="android:windowBackground">@color/app_window_background</item>
+      <!-- The app renders its own light/dark palette through Compose (GalleryTheme). Because the
+           activity theme is a Light theme, some OEM "force dark / dark mode for all apps" ROM
+           features would try to auto-invert the window, producing an inconsistent result (e.g. a
+           white chat area while the rest is dark). Opt out so our Compose dark theme is authoritative. -->
+      <item name="android:forceDarkAllowed" tools:targetApi="29">false</item>
   </style>
   <style name="Theme.Gallery.SplashScreen" parent="Theme.SplashScreen">
       <!-- Need to match surfaceLight in Colors.kt -->
