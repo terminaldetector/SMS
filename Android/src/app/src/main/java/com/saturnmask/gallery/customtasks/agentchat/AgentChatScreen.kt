@@ -781,11 +781,11 @@ fun AgentChatScreen(
       }
 
       GalleryWebView(
-        // Invisible background surface for JS-skill execution only — now that
-        // composableBelowMessageList renders inside ChatPanel's real linear Column (not an
-        // occluded Box layer), a visibly-sized box here would show as a blank gap between
-        // messages and the input row.
+        // JS-skill execution only. `hidden` is essential: a WebView child with MATCH_PARENT
+        // layout params can escape a 1dp AndroidView wrapper on some OEM WebView implementations,
+        // compositing an opaque white layer over the chat and hiding all messages.
         modifier = Modifier.size(1.dp),
+        hidden = true,
         onWebViewCreated = { webView ->
           webViewRef = webView
           webView.addJavascriptInterface(chatViewJavascriptInterface, "AiEdgeGallery")

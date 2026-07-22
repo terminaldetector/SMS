@@ -35,6 +35,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
@@ -103,6 +105,11 @@ fun GalleryWebView(
   onConsoleMessage: ((ConsoleMessage?) -> Unit)? = null,
   onPermissionRequest: ((PermissionRequest?) -> Unit)? = null,
   customWebViewClient: WebViewClient? = null,
+  // A JS-only WebView must never participate visually in the Compose hierarchy. Some OEM WebView
+  // implementations ignore the 1dp AndroidView wrapper when the child itself has MATCH_PARENT
+  // layout params and composite an opaque white hardware layer over the chat. This mode constrains
+  // both wrapper and child, clips drawing, removes opacity, and keeps JavaScript execution alive.
+  hidden: Boolean = false,
 ) {
   val context = LocalContext.current
 
@@ -141,14 +148,19 @@ fun GalleryWebView(
     }
 
   AndroidView(
-    modifier = modifier,
+    modifier = if (hidden) modifier.clipToBounds().alpha(0f) else modifier,
     factory = { ctx ->
       WebView(ctx).apply {
         layoutParams =
           ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
+            if (hidden) 1 else ViewGroup.LayoutParams.MATCH_PARENT,
+            if (hidden) 1 else ViewGroup.LayoutParams.MATCH_PARENT,
           )
+        if (hidden) {
+          setBackgroundColor(android.graphics.Color.TRANSPARENT)
+          isVerticalScrollBarEnabled = false
+          isHorizontalScrollBarEnabled = false
+        }
 
         settings.apply {
           javaScriptEnabled = true
