@@ -19,6 +19,7 @@ import android.util.Log
 import com.google.ai.edge.litertlm.Tool
 import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
+import com.saturnmask.gallery.customtasks.agentchat.UnifiedAgentEngine
 
 private const val TAG = "AGMATools"
 
@@ -27,9 +28,8 @@ private const val TAG = "AGMATools"
  * kept manually in sync (Kotlin annotations aren't readable at this call site) so the model's
  * unified "available skills" enumeration (see AgentChatTaskModule.kt's injectSkillsAndMcpTools)
  * and the Skills tab's "Device actions" listing (SkillsManagerBottomSheet.kt) both describe these
- * the same way a human sees them below. Discovery-path unification only — execution still goes
- * through the real [MobileActionsTools] methods, an entirely different ToolSet than JS skills'
- * loadSkill/WebView mechanism.
+ * the same way a human sees them below. [MobileActionsTools] is now a compatibility adapter owned
+ * by UnifiedAgentEngine, alongside AgentTools; it must not be registered as an independent engine.
  */
 val MOBILE_ACTIONS_CATALOG: List<Pair<String, String>> =
   listOf(

@@ -37,7 +37,6 @@ import com.saturnmask.gallery.proto.McpServers
 import com.saturnmask.gallery.proto.Skill
 import com.saturnmask.gallery.ui.llmchat.LlmChatModelHelper
 import com.google.ai.edge.litertlm.Contents
-import com.google.ai.edge.litertlm.tool
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -175,11 +174,15 @@ class AgentChatTask @Inject constructor() : CustomTask {
       val baseSystemPrompt =
         getEffectiveBaseSystemPrompt(initialSystemPrompt, toolsPrompt.isNotEmpty())
 
+      val unifiedAgentEngine = UnifiedAgentEngine(agentTools = agentTools)
+      val engineConfiguration = UnifiedAgentConfiguration(programmingEnabled = true)
       val finalSystemInstruction =
-        injectSkillsAndMcpTools(
+        unifiedAgentEngine.compileInstruction(
           baseSystemPrompt = baseSystemPrompt,
           skills = agentTools.skillManagerViewModel.getSelectedSkills(),
           toolsPrompt = toolsPrompt,
+          ragDocuments = emptyList(),
+          configuration = engineConfiguration,
         )
 
       LlmChatModelHelper.initialize(
@@ -196,7 +199,7 @@ class AgentChatTask @Inject constructor() : CustomTask {
         supportAudio = model.llmSupportAudio,
         onDone = onDone,
         systemInstruction = finalSystemInstruction,
-        tools = listOf(tool(agentTools)),
+        tools = unifiedAgentEngine.toolProviders(engineConfiguration),
         // Was hardcoded true — observed failing two different ways on real devices: "Failed to
         // create conversation: INTERNAL: Failed to create GemmaModelConstraintProvider" on a
         // non-Gemma model (Qwen2-VL-2B, where that provider doesn't apply at all), and "Failed to
@@ -266,7 +269,33 @@ fun injectSkillsAndMcpTools(
   ragDocuments: List<RagDocumentInfo> = emptyList(),
   universalAgentEnabled: Boolean = false,
   webSearchEnabled: Boolean = true,
-): Contents {
+): Contents =
+  Contents.of(
+    compileSkillsAndMcpPrompt(
+      baseSystemPrompt = baseSystemPrompt,
+      skills = skills,
+      toolsPrompt = toolsPrompt,
+      actionsEnabled = actionsEnabled,
+      ragEnabled = ragEnabled,
+      mobileActionsEnabled = mobileActionsEnabled,
+      ragDocuments = ragDocuments,
+      universalAgentEnabled = universalAgentEnabled,
+      webSearchEnabled = webSearchEnabled,
+    )
+  )
+
+/** Raw prompt compiler used by [UnifiedAgentEngine] before it appends capability instructions. */
+fun compileSkillsAndMcpPrompt(
+  baseSystemPrompt: String,
+  skills: List<Skill>,
+  toolsPrompt: String,
+  actionsEnabled: Boolean = true,
+  ragEnabled: Boolean = true,
+  mobileActionsEnabled: Boolean = false,
+  ragDocuments: List<RagDocumentInfo> = emptyList(),
+  universalAgentEnabled: Boolean = false,
+  webSearchEnabled: Boolean = true,
+): String {
   // "Actions" (roadmap term) covers both skills (load_skill) and MCP tools (runMcpTool) —
   // both are tool-calling based, so both get suppressed together when the user turns the
   // Actions trigger off.
@@ -278,11 +307,10 @@ fun injectSkillsAndMcpTools(
   // getSkillDescription tool for any name it's unsure about, and loadSkill still fetches full
   // instructions once it actually decides to use one — same JIT pattern loadSkill already used,
   // just extended one level further up.
-  // Mobile Actions are appended into this SAME list (not a separate enumeration) so the model's
-  // "what's available" picture is unified — even though execution for them goes through the
-  // entirely separate MobileActionsTools ToolSet, not loadSkill (see MOBILE_ACTIONS_CATALOG's
-  // doc). Gated by mobileActionsEnabled independently of actionsEnabled, since Mobile Actions has
-  // its own toggle and can be on/off regardless of the Skills switch.
+  // Mobile Actions are appended into this SAME list so the model gets one capability inventory.
+  // Their legacy direct-tool adapter and AgentTools are registered together by UnifiedAgentEngine;
+  // callers must not assemble either path independently. Mobile Actions retain a separate opt-in
+  // gate because device effects are more sensitive than loading an informational skill.
   val selectedSkillNames =
     buildString {
       if (actionsEnabled) {
@@ -321,7 +349,7 @@ fun injectSkillsAndMcpTools(
       .filter { it.isNotBlank() }
       .joinToString("\n\n")
   Log.d(TAG, "System prompt:\n$finalPrompt")
-  return Contents.of(finalPrompt)
+  return finalPrompt
 }
 
 /**

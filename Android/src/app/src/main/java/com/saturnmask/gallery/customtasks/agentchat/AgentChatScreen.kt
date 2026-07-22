@@ -127,7 +127,6 @@ import com.saturnmask.gallery.ui.llmchat.LlmChatViewModel
 import com.saturnmask.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.saturnmask.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.litertlm.Message
-import com.google.ai.edge.litertlm.tool
 import java.lang.Exception
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
@@ -1308,34 +1307,38 @@ private fun resetSessionWithCurrentSkillsAndMcps(
   }
   val toolsPrompt = agentTools.mcpManagerViewModel.getToolsPrompt()
   val actualSystemPrompt = getEffectiveBaseSystemPrompt(curSystemPrompt, toolsPrompt.isNotEmpty())
+  val engineConfiguration =
+    UnifiedAgentConfiguration(
+      actionsEnabled = actionsEnabled,
+      ragEnabled = ragEnabled,
+      webSearchEnabled = webSearchEnabled,
+      mobileActionsEnabled = mobileActionsEnabled,
+      universalAgentEnabled = universalAgentEnabled,
+      // CoderTools are project-scoped and only supplied by the Coder task. General programming
+      // guidance still applies in AI Chat without granting file access.
+      programmingEnabled = true,
+      // Groundwork only: no SuperAgentExtension is installed or enabled yet.
+      superAgentEnabled = false,
+    )
+  val unifiedAgentEngine =
+    UnifiedAgentEngine(
+      agentTools = agentTools,
+      mobileActionsTools = mobileActionsTools,
+      coderTools = coderTools,
+      universalAgentTools = universalAgentTools,
+    )
   viewModel.resetSession(
     task = task,
     model = model,
     systemInstruction =
-      injectSkillsAndMcpTools(
+      unifiedAgentEngine.compileInstruction(
         baseSystemPrompt = actualSystemPrompt,
         skills = skillManagerViewModel.getSelectedSkills(),
         toolsPrompt = toolsPrompt,
-        actionsEnabled = actionsEnabled,
-        ragEnabled = ragEnabled,
-        mobileActionsEnabled = mobileActionsEnabled,
         ragDocuments = ragDocuments,
-        universalAgentEnabled = universalAgentEnabled,
-        webSearchEnabled = webSearchEnabled,
+        configuration = engineConfiguration,
       ),
-    tools =
-      listOfNotNull(
-        tool(agentTools),
-        if (mobileActionsEnabled && mobileActionsTools != null) tool(mobileActionsTools)
-        else null,
-        // Only non-null (and only ever passed by CoderTask) once a project folder is picked —
-        // see the coderTools?.projectRootUri wiring above.
-        if (coderTools != null) tool(coderTools) else null,
-        // Only true once BOTH universalAgentRequested (opted in) AND universalAgentServiceEnabled
-        // (enabled in system Settings) hold — see universalAgentEffectivelyEnabled above.
-        if (universalAgentEnabled && universalAgentTools != null) tool(universalAgentTools)
-        else null,
-      ),
+    tools = unifiedAgentEngine.toolProviders(engineConfiguration),
     // See the matching comment in AgentChatTaskModule.kt's initializeModelFn — must track the
     // model's actual capability, not hardcode true, or session reset fails the same way initial
     // load did for any model without a vision/audio encoder.
