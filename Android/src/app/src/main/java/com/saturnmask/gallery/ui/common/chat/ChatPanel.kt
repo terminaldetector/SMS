@@ -323,7 +323,10 @@ fun ChatPanel(
     }
   }
 
-  Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+  Box(
+    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+    contentAlignment = Alignment.BottomCenter,
+  ) {
     // Audio record animation.
     AnimatedVisibility(
       showAudioRecorder,
