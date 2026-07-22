@@ -105,9 +105,9 @@ jobs:
                  "work on-device until these secrets are configured in the repo settings."
           else
             sed -i "s|REPLACE_WITH_YOUR_CLIENT_ID_IN_HUGGINGFACE_APP|$HF_CLIENT_ID|" \
-              app/src/main/java/com/google/ai/edge/gallery/common/ProjectConfig.kt
+              app/src/main/java/com/saturnmask/gallery/common/ProjectConfig.kt
             sed -i "s|REPLACE_WITH_YOUR_REDIRECT_URI_IN_HUGGINGFACE_APP|$HF_REDIRECT_URI|" \
-              app/src/main/java/com/google/ai/edge/gallery/common/ProjectConfig.kt
+              app/src/main/java/com/saturnmask/gallery/common/ProjectConfig.kt
             sed -i "s|REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP|$HF_REDIRECT_SCHEME|" \
               app/build.gradle.kts
             echo "HuggingFace OAuth config injected from secrets."
