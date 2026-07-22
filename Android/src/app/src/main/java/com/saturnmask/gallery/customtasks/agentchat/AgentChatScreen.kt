@@ -901,6 +901,13 @@ fun AgentChatScreen(
           },
           onWebSearchSettingsClicked = { showWebSearchSettingsBottomSheet = true },
         )
+
+        // Files attached to the chat (RAG) shown right above the input so the user can see and
+        // remove what's currently in context for their next message.
+        AttachedFilesRow(
+          documents = ragUiState.documents,
+          onRemove = { documentId -> ragManagerViewModel.removeDocument(documentId) },
+        )
       }
 
       if (coderTools != null) {

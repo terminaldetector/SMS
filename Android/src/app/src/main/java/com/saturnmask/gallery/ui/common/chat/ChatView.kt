@@ -269,7 +269,10 @@ fun ChatView(
           }
         }
       },
-      gesturesEnabled = drawerState.isOpen,
+      // Swipe from the right edge to open (RTL provider above puts this drawer on the right), not
+      // only closeable-by-swipe once opened via the app-bar button. This is the swipe-in "burger"
+      // menu that also hosts the future Settings section (see ChatHistorySideSheetContent).
+      gesturesEnabled = true,
     ) {
       CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Scaffold(

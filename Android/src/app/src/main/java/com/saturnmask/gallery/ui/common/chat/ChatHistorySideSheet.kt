@@ -30,10 +30,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -100,6 +105,19 @@ fun ChatHistorySideSheetContent(
         Text(stringResource(R.string.new_chat))
       }
     }
+
+    // Settings groundwork: this right, swipe-in menu is where upcoming settings will live.
+    // The rows below are placeholders wired for future screens.
+    Text(
+      "Settings",
+      style = MaterialTheme.typography.titleSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(bottom = 4.dp),
+    )
+    SettingsStubRow(icon = Icons.Rounded.Palette, label = "Appearance")
+    SettingsStubRow(icon = Icons.Rounded.Notifications, label = "Notifications")
+    SettingsStubRow(icon = Icons.Rounded.Tune, label = "Advanced")
+    Spacer(modifier = Modifier.size(12.dp))
 
     // Subheading Row: Chat history and Clear all button
     Row(
@@ -223,6 +241,39 @@ fun ChatHistorySideSheetContent(
       dismissButton = {
         TextButton(onClick = { itemToDelete = null }) { Text(stringResource(R.string.cancel)) }
       },
+    )
+  }
+}
+
+/**
+ * A single row in the future "Settings" section of the right swipe-in menu. Non-interactive
+ * groundwork for now (marked "Soon"); each row is where an actual settings screen/toggle will be
+ * wired later.
+ */
+@Composable
+private fun SettingsStubRow(icon: ImageVector, label: String) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.size(20.dp),
+    )
+    Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+    Text(
+      "Soon",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+    )
+    Icon(
+      imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+      modifier = Modifier.size(20.dp),
     )
   }
 }

@@ -18,23 +18,31 @@ package com.saturnmask.gallery.customtasks.agentchat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +54,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.saturnmask.gallery.domain.rag.RagDocumentInfo
 
 /**
  * The agent "triggers" (Skills / RAG / Web search) rendered as a compact, minimalist Material
@@ -224,4 +233,49 @@ private fun skillsCaption(
   if (mcpToolsCount > 0) parts.add("$mcpToolsCount MCP tool${if (mcpToolsCount == 1) "" else "s"}")
   if (mobileActionsEnabled) parts.add("Mobile Actions")
   return if (parts.isEmpty()) "Tools enabled" else parts.joinToString(" · ")
+}
+
+/**
+ * A horizontally-scrollable row of Material 3 input chips for the documents currently attached to
+ * the chat (RAG). Rendered right above the input so the user can see — and remove — the files that
+ * are in context for their next message. Renders nothing when there are no attached documents.
+ */
+@Composable
+fun AttachedFilesRow(
+  documents: List<RagDocumentInfo>,
+  onRemove: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  if (documents.isEmpty()) return
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState())
+        .padding(horizontal = 16.dp, vertical = 2.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    for (doc in documents) {
+      InputChip(
+        selected = true,
+        onClick = { onRemove(doc.id) },
+        label = { Text(doc.name, maxLines = 1) },
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Outlined.Description,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        trailingIcon = {
+          Icon(
+            imageVector = Icons.Outlined.Close,
+            contentDescription = "Remove ${doc.name}",
+            modifier = Modifier.size(16.dp).clickable { onRemove(doc.id) },
+          )
+        },
+      )
+    }
+  }
 }
