@@ -1,6 +1,7 @@
 # HELIX protocol CI — runs the full proof suite on every push/PR: the Python reference selftests,
-# the conformance vector check, compileall, and all 9 cross-language JS smokes (each spawns the real
-# Python mesh). Green = the protocol + all ChatterUI integration wires are intact.
+# the conformance vector check, compileall, and the cross-language JS smokes (each spawns the real
+# Python mesh, or exercises the in-app phone-to-phone mesh logic). Green = the protocol + all
+# ChatterUI integration wires are intact.
 
 name: HELIX CI
 
@@ -49,12 +50,12 @@ jobs:
           PYTHONPATH=. python3 -m helix.conformance --check
           python3 -m compileall -q helix
 
-      - name: JS proofs (9 smokes, each drives the real Python mesh)
+      - name: JS proofs (each drives the real Python mesh or the in-app mesh logic)
         env:
           PYTHON: python3
         run: |
           set -e
           for s in conformance conformance_noble control_smoke http_smoke agent_smoke \
-                   l2_host_smoke l2_ws_smoke rpc_smoke shard_smoke heal_smoke; do
+                   l2_host_smoke l2_ws_smoke p2p_ws_smoke rpc_smoke shard_smoke heal_smoke; do
             echo "== $s.mjs =="; node "integration/chatterui_llamacpp/js/$s.mjs"
           done

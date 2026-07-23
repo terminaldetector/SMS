@@ -1,11 +1,13 @@
-// HELIX Mesh screen (ChatterUI mesh mod) — two roles:
-//   L1 (client): a UI over a HELIX node (helix/host/http_control.py) over fetch.
-//   L2 (agent):  this phone's loaded GGUF model JOINS the mesh as a Track-A agent over WebSocket
-//                (no native module: built-in WebSocket + @noble + expo-crypto nonce).
+// HELIX Mesh screen (ChatterUI mesh mod) — three roles:
+//   L1 (client):  a UI over a HELIX node (helix/host/http_control.py) over fetch.
+//   L2 (agent):   this phone's loaded GGUF model JOINS the mesh as a Track-A agent over WebSocket
+//                 (no native module: built-in WebSocket + @noble + expo-crypto nonce).
+//   Device-to-device (no PC): this phone HOSTS the coordinator (helixCoordinator.ts) so another
+//                 ChatterUI phone joins it directly with "Join as agent" — no PC in the loop.
 // First-experiments UI.
 
 import * as ExpoCrypto from 'expo-crypto'
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useMMKVString } from 'react-native-mmkv'
 
@@ -15,6 +17,7 @@ import ThemedTextInput from '@components/input/ThemedTextInput'
 import HeaderTitle from '@components/views/HeaderTitle'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
+import { HelixCoordinator } from '@lib/helixCoordinator'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
 import { Logger } from '@lib/state/Logger'
 import { mmkv } from '@lib/storage/MMKV'
@@ -22,8 +25,24 @@ import { Theme } from '@lib/theme/ThemeManager'
 
 const HOST_KEY = 'helix-mesh-host'
 const WS_KEY = 'helix-agent-ws'
-// Cluster secret — must match the coordinator (helix/host/agent_host_ws_demo.py).
+// Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
+// also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
+const HOST_PORT = 8790
+type HostMode = 'single' | 'voting'
+
+// Best-effort LAN IP for the host phone (so the other phone knows what to type). expo-network is an
+// Expo module (New-Architecture-safe); required lazily so it never touches startup.
+async function getLanIp(): Promise<string> {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const Net = require('expo-network')
+        const ip = await Net.getIpAddressAsync()
+        return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
+    } catch {
+        return ''
+    }
+}
 
 function normalizeWs(input: string): string {
     let s = (input || '').trim().replace(/\/+$/, '')
@@ -52,6 +71,17 @@ const HelixMeshScreen = () => {
     const [agentJoined, setAgentJoined] = useState(false)
     const [agentJoining, setAgentJoining] = useState(false)
     const agentRef = useRef<HelixAgentNode | null>(null)
+
+    // Device-to-device (no PC): this phone hosts the coordinator.
+    const [hosting, setHosting] = useState(false)
+    const [hostStarting, setHostStarting] = useState(false)
+    const [hostIp, setHostIp] = useState('')
+    const [hostAgents, setHostAgents] = useState<string[]>([])
+    const [hostPrompt, setHostPrompt] = useState('')
+    const [hostMode, setHostMode] = useState<HostMode>('single')
+    const [hostRunning, setHostRunning] = useState(false)
+    const [hostResult, setHostResult] = useState('')
+    const coordRef = useRef<HelixCoordinator | null>(null)
     const agentId = useMemo(() => {
         const k = 'helix-agent-id'
         let v = mmkv.getString(k)
@@ -105,6 +135,67 @@ const HelixMeshScreen = () => {
         agentRef.current = null
         setAgentJoined(false)
         Logger.infoToast('Left the mesh')
+    }
+
+    // Poll the coordinator's joined agents while hosting, and tear the server down on unmount.
+    useEffect(() => {
+        if (!hosting) return
+        const t = setInterval(() => setHostAgents(coordRef.current?.agents() ?? []), 1000)
+        return () => clearInterval(t)
+    }, [hosting])
+    useEffect(() => {
+        return () => coordRef.current?.close()
+    }, [])
+
+    const onStartHost = async () => {
+        setHostStarting(true)
+        try {
+            const coord = new HelixCoordinator(`host-${agentId}`, AGENT_SECRET, {
+                randomBytes: makeExpoRandomBytes(ExpoCrypto),
+            })
+            await coord.listen(HOST_PORT, '0.0.0.0')
+            coordRef.current = coord
+            setHosting(true)
+            setHostAgents([])
+            setHostIp(await getLanIp())
+            Logger.infoToast(`Hosting on :${HOST_PORT} — other phone joins this device`)
+        } catch (e) {
+            coordRef.current?.close()
+            coordRef.current = null
+            Logger.errorToast(`Host start failed: ${e instanceof Error ? e.message : String(e)}`)
+        } finally {
+            setHostStarting(false)
+        }
+    }
+
+    const onStopHost = () => {
+        coordRef.current?.close()
+        coordRef.current = null
+        setHosting(false)
+        setHostAgents([])
+        Logger.infoToast('Stopped hosting')
+    }
+
+    const onRunHost = async () => {
+        const coord = coordRef.current
+        if (!coord) return
+        if (!hostPrompt.trim()) {
+            Logger.errorToast('Enter a prompt')
+            return
+        }
+        if (coord.agents().length === 0) {
+            Logger.errorToast('No agent phone has joined yet')
+            return
+        }
+        setHostRunning(true)
+        setHostResult('')
+        try {
+            setHostResult(await coord.infer(hostPrompt, hostMode))
+        } catch (e) {
+            Logger.errorToast(`Run failed: ${e instanceof Error ? e.message : String(e)}`)
+        } finally {
+            setHostRunning(false)
+        }
     }
 
     const onConnect = async () => {
@@ -224,6 +315,79 @@ const HelixMeshScreen = () => {
             )}
 
             <View style={styles.agentBox}>
+                <Text style={styles.section}>Device-to-device (no PC)</Text>
+                <Text style={styles.dim}>
+                    This phone becomes the coordinator. The other ChatterUI phone loads a model and
+                    uses "Join as agent" below, pointed at this phone's address. No PC needed.
+                </Text>
+                <ThemedButton
+                    label={hostStarting ? 'Starting…' : hosting ? 'Stop hosting' : 'Start hosting'}
+                    variant={hosting ? 'critical' : 'primary'}
+                    onPress={hosting ? onStopHost : onStartHost}
+                    buttonStyle={styles.gap}
+                />
+                {hosting && (
+                    <View style={styles.gap}>
+                        <Text style={styles.node}>
+                            ● hosting on port {HOST_PORT}
+                            {hostIp ? ` — other phone joins ${hostIp}:${HOST_PORT}` : ''}
+                        </Text>
+                        {!hostIp && (
+                            <Text style={styles.dim}>
+                                Find this phone's Wi-Fi IP in Settings → Wi-Fi; the other phone joins
+                                that IP:{HOST_PORT}.
+                            </Text>
+                        )}
+                        <Text style={[styles.node, styles.gap]}>
+                            Agents joined ({hostAgents.length})
+                        </Text>
+                        {hostAgents.length === 0 ? (
+                            <Text style={styles.dim}>waiting for the other phone to join…</Text>
+                        ) : (
+                            hostAgents.map((a) => (
+                                <Text key={a} style={styles.node}>
+                                    • {a}
+                                </Text>
+                            ))
+                        )}
+
+                        <ThemedTextInput
+                            label="Prompt"
+                            value={hostPrompt}
+                            onChangeText={setHostPrompt}
+                            placeholder="Ask the other phone's model…"
+                            multiline
+                            numberOfLines={3}
+                            containerStyle={styles.gap}
+                        />
+                        <HorizontalSelector
+                            label="Mode"
+                            selected={hostMode}
+                            onPress={setHostMode}
+                            style={styles.gap}
+                            values={[
+                                { label: 'Single', value: 'single' },
+                                { label: 'Voting', value: 'voting' },
+                            ]}
+                        />
+                        <ThemedButton
+                            label="Run on mesh"
+                            variant="primary"
+                            onPress={onRunHost}
+                            buttonStyle={styles.gap}
+                        />
+                        {hostRunning && <ActivityIndicator color={color.text._100} style={styles.gap} />}
+                        {!!hostResult && (
+                            <View style={styles.resultBox}>
+                                <Text style={styles.section}>Result</Text>
+                                <Text style={styles.result}>{hostResult}</Text>
+                            </View>
+                        )}
+                    </View>
+                )}
+            </View>
+
+            <View style={styles.agentBox}>
                 <Text style={styles.section}>Join as agent (this phone's model)</Text>
                 <Text style={styles.dim}>
                     Share your loaded model with a mesh coordinator over WebSocket. Load a model in
@@ -250,7 +414,9 @@ const HelixMeshScreen = () => {
             </View>
 
             <Text style={styles.help}>
-                On a PC in the same Wi-Fi: {'\n'}
+                No PC: one phone taps "Start hosting", the other loads a model and taps "Join as
+                agent" with the host phone's IP:{HOST_PORT}. Both on the same Wi-Fi.{'\n\n'}
+                With a PC in the same Wi-Fi: {'\n'}
                 • L1 (drive the mesh): python -m helix.host.http_control --host 0.0.0.0{'\n'}
                 • L2 (use this phone as an agent): python -m helix.host.agent_host_ws_demo --host 0.0.0.0
             </Text>

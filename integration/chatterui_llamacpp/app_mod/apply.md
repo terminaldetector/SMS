@@ -59,13 +59,38 @@ APK, open **HELIX Mesh**, enter the node's `LAN-IP:8799`, Connect, then Run.
 ## Level 2 (optional, next step): the phone's model as a mesh agent
 
 L1 above needs zero new deps. **Level 2** makes the phone a Track-A agent (its GGUF model answers
-mesh tasks) — still **no native crypto** (pure-JS `@noble`). Extra files: `app_mod/lib/helixCrypto.ts`,
-`helixFrame.ts`, `helixAgent.ts` → `lib/`. Extra deps:
+mesh tasks) — still **no native module at all** (pure-JS `@noble` + the built-in `WebSocket`; the
+frame nonce comes from `expo-crypto`, already a ChatterUI dep). Extra files:
+`app_mod/lib/helixCrypto.ts`, `helixFrame.ts`, `helixAgent.ts` → `lib/`. Extra deps:
 ```bash
-npm i @noble/ciphers @noble/curves @noble/hashes react-native-tcp-socket react-native-get-random-values
+npm i @noble/ciphers @noble/curves @noble/hashes   # all pure JS; no native, no polyfill import
 ```
-Import `react-native-get-random-values` once at the top of `app/_layout.tsx`. Full wiring + a
-coordinator to test against (`helix.host.agent_host_demo`) are in `../README_MESH.md` (Level 2).
+**Do NOT** add `react-native-tcp-socket` / `react-native-get-random-values` for L2 — adding
+new-architecture native modules you don't need can break startup. Full wiring + a coordinator to
+test against (`helix.host.agent_host_ws_demo`) are in `../README_MESH.md` (Level 2). The screen's
+**"Join as agent"** section is the entry point.
+
+## Device-to-device (no PC): this phone hosts the coordinator
+
+Lets **two ChatterUI phones mesh with no PC**: one phone hosts the coordinator, the other joins with
+"Join as agent". Only the **host** role needs a native server socket (`react-native-tcp-socket`); the
+agent phone stays native-free (built-in WebSocket). Extra files (on top of L2):
+`app_mod/lib/helixWsServer.ts`, `helixCoordinator.ts` → `lib/`. Extra deps:
+```bash
+npm i react-native-tcp-socket expo-network   # host role only; loaded lazily (never at startup)
+```
+`react-native-tcp-socket` is required **lazily** (only when the host taps *Start hosting*) and
+`expo-network` (for showing the host's LAN IP) the same way, so neither touches app startup.
+
+> **Gate first (Phase 0):** `react-native-tcp-socket`'s New-Architecture support is unverified.
+> After adding it, rebuild the release APK and confirm the app still **starts** (splash passes) before
+> relying on the host feature. If startup breaks, the native dep is the cause — remove it and use the
+> PC coordinator path instead.
+
+**Test on 2 phones (same Wi-Fi):** phone A → **Device-to-device → Start hosting** (note its
+`IP:8790`); phone B → load a GGUF model → **Join as agent** → `A_IP:8790`; on A type a prompt →
+**Run on mesh** → phone B's model answers. Proven cross-language in-env by
+`node integration/chatterui_llamacpp/js/p2p_ws_smoke.mjs`.
 
 ## Notes
 - L1 needs no new dependency: the screen uses only `fetch`, `react-native-mmkv` (already a
