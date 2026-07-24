@@ -64,6 +64,36 @@ fun cleanUpMediapipeTaskErrorMessage(message: String): String {
   return message
 }
 
+// Extensions actually used by LiteRT-LM model files in this fork/upstream (see doc comments in
+// data/Model.kt and ui/llmchat/LlmChatModelHelper.kt referring to ".task"/".litertlm" files).
+// Deliberately not narrowed to exactly one of these per declared model type — nothing in this
+// codebase enforces that distinction today, and guessing wrong here would reject valid imports.
+// This only catches the obviously-wrong case (a GGUF, a zip, a text file, etc. renamed/mistaken
+// for a model file), not a subtler container/schema mismatch within a plausible extension.
+private val KNOWN_LITERT_MODEL_EXTENSIONS = setOf(".task", ".litertlm", ".tflite")
+
+/**
+ * Conservative pre-native-engine sanity check: catches an empty/missing file or an obviously
+ * wrong file type before it's ever handed to the native LiteRT-LM engine. Returns a user-facing
+ * reason string on failure, or null if the file looks plausible. This is NOT format/metadata/
+ * op-set/quantization validation — none of that is checked here, since doing so correctly would
+ * need a bundled flatbuffer schema parser (a real new dependency) rather than a cheap client-side
+ * check. A file that passes this can still fail once the native engine actually parses it.
+ */
+fun validateModelFileOrNull(modelPath: String): String? {
+  val file = File(modelPath)
+  if (!file.exists() || file.length() <= 0L) {
+    return "the model file is missing or empty (expected at ${file.path})"
+  }
+  val hasKnownExtension =
+    KNOWN_LITERT_MODEL_EXTENSIONS.any { file.name.endsWith(it, ignoreCase = true) }
+  if (!hasKnownExtension) {
+    return "\"${file.name}\" doesn't look like a LiteRT-LM model file (expected one of " +
+      "${KNOWN_LITERT_MODEL_EXTENSIONS.joinToString(", ")})"
+  }
+  return null
+}
+
 fun processLlmResponse(response: String): String {
   return response.replace("\\n", "\n")
 }

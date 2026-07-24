@@ -20,6 +20,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.saturnmask.gallery.common.cleanUpMediapipeTaskErrorMessage
+import com.saturnmask.gallery.common.validateModelFileOrNull
 import com.saturnmask.gallery.data.Accelerator
 import com.saturnmask.gallery.data.backendHealthStoreFrom
 import com.saturnmask.gallery.data.ConfigKeys
@@ -53,6 +54,12 @@ import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
 
 private const val TAG = "AGLlmChatModelHelper"
+
+// Internal-only marker prefix: distinguishes "the fallback-exhausted engine-creation failure" from
+// any other exception thrown inside initialize()'s outer try, so the outer catch can surface a
+// clearer "this model appears incompatible" message instead of a generic one. Never shown to the
+// user as-is — always stripped off first.
+private const val MODEL_INCOMPATIBLE_MARKER = "MODEL_INCOMPATIBLE: "
 
 data class LlmModelInstance(val engine: Engine, var conversation: Conversation)
 
@@ -146,6 +153,13 @@ object LlmChatModelHelper : LlmModelHelper {
     Log.d(TAG, "Preferred backend: $preferredBackend (fallback order: $fallbackOrder)")
 
     val modelPath = model.getPath(context = context)
+    // Conservative check only (file existence/size/extension) — pre-empts the obviously-wrong
+    // case before ever touching native code. Not a substitute for real format/op-set/quantization
+    // validation, which would need a bundled flatbuffer schema parser; see validateModelFileOrNull.
+    validateModelFileOrNull(modelPath)?.let { reason ->
+      onDone("This model appears incompatible: $reason")
+      return
+    }
     fun buildEngineConfig() =
       EngineConfig(
         modelPath = modelPath,
@@ -170,6 +184,56 @@ object LlmChatModelHelper : LlmModelHelper {
     } catch (e: Exception) {
       // Ignore exceptions and assume not supported.
     }
+    // No public API tells us up front whether a .task/.litertlm file actually has a vision or
+    // audio encoder built in (litertlm's Capabilities class only exposes speculative-decoding
+    // support) — the only signal is engine creation itself failing with a NOT_FOUND error
+    // naming the missing encoder. So: try with what was declared, and if that specific failure
+    // shows up, drop that one modality and retry rather than surfacing a hard crash. At most
+    // two modality retries (one per modality) plus at most fallbackOrder.size-1 backend
+    // fallbacks, so this can't loop forever on an unrelated failure.
+    //
+    // Isolated into its own function, called from its own try/catch below, separate from
+    // conversation creation and capability-override persistence — so a load failure that
+    // surfaces as a catchable JVM exception here gets a distinct "this model appears
+    // incompatible" message instead of being lumped in with unrelated failures. This does NOT
+    // protect against a true native SIGSEGV, which still kills the process before any Kotlin
+    // catch here can run — same hard limit BackendHealthStore's own doc comment states for the
+    // GPU/NPU crash case. It only improves the catchable-exception case.
+    fun createEngineWithFallback(): Engine {
+      while (true) {
+        healthStore.markAttemptStarted(model.name, fallbackOrder[backendIndex].label)
+        try {
+          val engine = Engine(buildEngineConfig())
+          engine.initialize()
+          healthStore.markAttemptSucceeded(model.name, fallbackOrder[backendIndex].label)
+          return engine
+        } catch (e: Exception) {
+          val message = e.message ?: ""
+          if (shouldEnableImage && message.contains("VISION_ENCODER", ignoreCase = true)) {
+            Log.w(TAG, "Model '${model.name}' has no vision encoder; retrying without image support.")
+            shouldEnableImage = false
+          } else if (shouldEnableAudio && message.contains("AUDIO_ENCODER", ignoreCase = true)) {
+            Log.w(TAG, "Model '${model.name}' has no audio encoder; retrying without audio support.")
+            shouldEnableAudio = false
+          } else if (backendIndex < fallbackOrder.lastIndex) {
+            Log.w(
+              TAG,
+              "Backend ${fallbackOrder[backendIndex]} failed to initialize for model " +
+                "'${model.name}' (${e.message}); falling back to ${fallbackOrder[backendIndex + 1]}.",
+            )
+            healthStore.markBad(model.name, fallbackOrder[backendIndex].label)
+            backendIndex++
+            preferredBackend = backendFor(fallbackOrder[backendIndex])
+          } else {
+            throw Exception(
+              MODEL_INCOMPATIBLE_MARKER +
+                cleanUpMediapipeTaskErrorMessage(e.message ?: "Unknown error")
+            )
+          }
+        }
+      }
+    }
+
     // Create an instance of LiteRT LM engine and conversation.
     try {
       var speculativeDecoding = false
@@ -189,43 +253,7 @@ object LlmChatModelHelper : LlmModelHelper {
       ExperimentalFlags.enableSpeculativeDecoding = speculativeDecoding
       Log.d(TAG, "Speculative decoding enabled: $speculativeDecoding")
 
-      // No public API tells us up front whether a .task/.litertlm file actually has a vision or
-      // audio encoder built in (litertlm's Capabilities class only exposes speculative-decoding
-      // support) — the only signal is engine creation itself failing with a NOT_FOUND error
-      // naming the missing encoder. So: try with what was declared, and if that specific failure
-      // shows up, drop that one modality and retry rather than surfacing a hard crash. At most
-      // two modality retries (one per modality) plus at most fallbackOrder.size-1 backend
-      // fallbacks, so this can't loop forever on an unrelated failure.
-      lateinit var engine: Engine
-      while (true) {
-        healthStore.markAttemptStarted(model.name, fallbackOrder[backendIndex].label)
-        try {
-          engine = Engine(buildEngineConfig())
-          engine.initialize()
-          healthStore.markAttemptSucceeded(model.name, fallbackOrder[backendIndex].label)
-          break
-        } catch (e: Exception) {
-          val message = e.message ?: ""
-          if (shouldEnableImage && message.contains("VISION_ENCODER", ignoreCase = true)) {
-            Log.w(TAG, "Model '${model.name}' has no vision encoder; retrying without image support.")
-            shouldEnableImage = false
-          } else if (shouldEnableAudio && message.contains("AUDIO_ENCODER", ignoreCase = true)) {
-            Log.w(TAG, "Model '${model.name}' has no audio encoder; retrying without audio support.")
-            shouldEnableAudio = false
-          } else if (backendIndex < fallbackOrder.lastIndex) {
-            Log.w(
-              TAG,
-              "Backend ${fallbackOrder[backendIndex]} failed to initialize for model " +
-                "'${model.name}' (${e.message}); falling back to ${fallbackOrder[backendIndex + 1]}.",
-            )
-            healthStore.markBad(model.name, fallbackOrder[backendIndex].label)
-            backendIndex++
-            preferredBackend = backendFor(fallbackOrder[backendIndex])
-          } else {
-            throw e
-          }
-        }
-      }
+      val engine = createEngineWithFallback()
       model.lastActiveAccelerator = fallbackOrder[backendIndex].label
       // Correct the in-memory Model (so the UI's attach-image/attach-audio buttons stop offering
       // a modality this model can't do, this session) and persist it via ModelCapabilityOverrideStore
@@ -260,7 +288,12 @@ object LlmChatModelHelper : LlmModelHelper {
       ExperimentalFlags.enableConversationConstrainedDecoding = false
       model.instance = LlmModelInstance(engine = engine, conversation = conversation)
     } catch (e: Exception) {
-      onDone(cleanUpMediapipeTaskErrorMessage(e.message ?: "Unknown error"))
+      val message = e.message ?: "Unknown error"
+      if (message.startsWith(MODEL_INCOMPATIBLE_MARKER)) {
+        onDone("This model appears incompatible: ${message.removePrefix(MODEL_INCOMPATIBLE_MARKER)}")
+      } else {
+        onDone(cleanUpMediapipeTaskErrorMessage(message))
+      }
       return
     }
     onDone("")

@@ -21,6 +21,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.saturnmask.gallery.data.Accelerator
 import com.saturnmask.gallery.data.DataStoreRepository
 import com.saturnmask.gallery.data.DownloadRepository
 import com.saturnmask.gallery.data.ModelDownloadStatus
@@ -59,6 +60,10 @@ data class RagManagerUiState(
   val selectedMode: RagMode = RagMode.STATIC,
   val embeddingModelDownload: EmbeddingModelDownloadUiState = EmbeddingModelDownloadUiState(),
   val embedderSource: EmbedderSource = EmbedderSource.BUILT_IN,
+  // Which backend the embedder (built-in or custom, whichever is active) runs on — independent
+  // of the main chat model's own accelerator, see TfLiteTextEmbedder/EmbedderSettingsStore. Only
+  // CPU/GPU are meaningful choices here; there's no NPU delegate in this embedder's TFLite path.
+  val embedderAccelerator: Accelerator = Accelerator.CPU,
   val customModelFileName: String? = null,
   val customTokenizerFileName: String? = null,
   val customEmbedderImporting: Boolean = false,
@@ -111,10 +116,19 @@ constructor(
     _uiState.update {
       it.copy(
         embedderSource = embedderSettingsStore.getSelectedSource(),
+        embedderAccelerator = embedderSettingsStore.getAccelerator(),
         customModelFileName = modelPath?.let { p -> File(p).name },
         customTokenizerFileName = tokenizerPath?.let { p -> File(p).name },
       )
     }
+  }
+
+  /** CPU/GPU only — see [RagManagerUiState.embedderAccelerator]. Applies immediately, no restart
+   *  needed: [FallbackTextEmbedder.refreshActiveEmbedder] reconfigures the active embedder. */
+  fun setEmbedderAccelerator(accelerator: Accelerator) {
+    embedderSettingsStore.setAccelerator(accelerator)
+    fallbackTextEmbedder.refreshActiveEmbedder()
+    refreshEmbedderSourceState()
   }
 
   /** No-ops if [sessionId] hasn't changed, so calling this every recomposition is cheap. */

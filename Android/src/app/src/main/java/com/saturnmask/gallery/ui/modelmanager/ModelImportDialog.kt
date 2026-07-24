@@ -62,6 +62,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.saturnmask.gallery.R
 import com.saturnmask.gallery.common.isPixel10
+import com.saturnmask.gallery.common.validateModelFileOrNull
 import com.saturnmask.gallery.data.Accelerator
 import com.saturnmask.gallery.data.BooleanSwitchConfig
 import com.saturnmask.gallery.data.Config
@@ -476,6 +477,14 @@ private fun importModel(
     } finally {
       inputStream?.close()
       outputStream.close()
+    }
+    // Conservative sanity check (existence/size/extension) — catches an obviously wrong file at
+    // import time instead of only discovering it later when the user tries to run the model. See
+    // validateModelFileOrNull's doc comment for what this can't catch.
+    validateModelFileOrNull(outputFile.path)?.let { reason ->
+      outputFile.delete()
+      onError("This file doesn't look like a valid model: $reason")
+      return@launch
     }
     Log.d(TAG, "import done")
     onProgress(1f)

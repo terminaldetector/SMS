@@ -96,6 +96,11 @@ constructor(
    * is restored on process start.
    */
   fun refreshActiveEmbedder() {
+    // Applies regardless of which source ends up selected below — builtIn is a Hilt singleton
+    // that can't be torn down and reconstructed the way the custom embedder below is, so its
+    // accelerator has to be changed in place.
+    val accelerator = embedderSettingsStore.getAccelerator()
+    builtIn.reconfigureAccelerator(accelerator)
     active =
       if (embedderSettingsStore.getSelectedSource() == EmbedderSource.CUSTOM) {
         val modelPath = embedderSettingsStore.getCustomModelPath()
@@ -109,6 +114,7 @@ constructor(
             id = "custom-embedder",
             queryPrefix = "",
             documentPrefix = "",
+            accelerator = accelerator,
           )
         } else {
           builtIn

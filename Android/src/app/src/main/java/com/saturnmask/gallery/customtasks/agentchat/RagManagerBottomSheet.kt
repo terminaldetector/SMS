@@ -61,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.saturnmask.gallery.data.Accelerator
 import com.saturnmask.gallery.data.ModelDownloadStatusType
 import com.saturnmask.gallery.domain.rag.EmbedderSource
 import com.saturnmask.gallery.domain.rag.RagDocumentInfo
@@ -131,6 +132,24 @@ fun RagManagerBottomSheet(
           selected = uiState.embedderSource == EmbedderSource.CUSTOM,
           onClick = { viewModel.useCustomEmbedder() },
           label = { Text("Custom") },
+        )
+      }
+      Text(
+        text = "Embedder runs on:",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+        FilterChip(
+          selected = uiState.embedderAccelerator == Accelerator.CPU,
+          onClick = { viewModel.setEmbedderAccelerator(Accelerator.CPU) },
+          label = { Text("CPU") },
+        )
+        FilterChip(
+          selected = uiState.embedderAccelerator == Accelerator.GPU,
+          onClick = { viewModel.setEmbedderAccelerator(Accelerator.GPU) },
+          label = { Text("GPU") },
         )
       }
       if (uiState.embedderSource == EmbedderSource.BUILT_IN) {

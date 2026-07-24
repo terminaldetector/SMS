@@ -125,6 +125,9 @@ data class AllowedModel(
     // Google Tensor, not Gemma4-2B/4B — there is no official NPU path for Gemma-4 on Pixel today,
     // independent of any device/driver bug. Gemma-4's allowlist entries deliberately stay
     // "gpu,cpu" only; don't "fix" this based on marketing claims without re-checking that table.
+    // Tracked upstream at google-ai-edge/LiteRT-LM#1915 — it's a missing support row, not a
+    // fallback bug; re-check that issue/the table above before ever touching this, don't file a
+    // duplicate.
 
     if (isLlmModel) {
       val defaultTopK: Int = defaultConfig.topK ?: DEFAULT_TOPK
