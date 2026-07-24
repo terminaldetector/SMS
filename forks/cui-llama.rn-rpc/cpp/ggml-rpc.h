@@ -8,10 +8,15 @@ extern "C" {
 
 #define RPC_PROTO_MAJOR_VERSION    4
 #define RPC_PROTO_MINOR_VERSION    0
-#define RPC_PROTO_PATCH_VERSION    0
+#define RPC_PROTO_PATCH_VERSION    1
 
 #ifdef  __cplusplus
-static_assert(LM_GGML_OP_COUNT == 96, "LM_GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+// This fork's cpp/ggml.h carries one op (LM_GGML_OP_GLU) added upstream after the llama.cpp
+// commit this file was originally vendored from (build-info.cpp pins 6d57c26 / b9309, whose
+// ggml-rpc.h shipped with this assert at 96) - the vendored cpp/ tree as a whole tracks slightly
+// newer than that stale pin. Bumped to match; re-bump alongside RPC_PROTO_PATCH_VERSION if this
+// ever fires again after a future ggml.h update.
+static_assert(LM_GGML_OP_COUNT == 97, "LM_GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
 #endif
 
 #define LM_GGML_RPC_MAX_SERVERS       16
