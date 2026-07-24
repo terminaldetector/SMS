@@ -125,6 +125,7 @@ import com.saturnmask.gallery.ui.common.chat.ChatSide
 import com.saturnmask.gallery.ui.common.chat.LogMessage
 import com.saturnmask.gallery.ui.common.chat.LogMessageLevel
 import com.saturnmask.gallery.ui.common.chat.SendMessageTrigger
+import com.saturnmask.gallery.ui.common.chat.toLiteRtMessages
 import com.saturnmask.gallery.ui.llmchat.LlmChatScreen
 import com.saturnmask.gallery.ui.llmchat.LlmChatViewModel
 import com.saturnmask.gallery.ui.modelmanager.ModelInitializationStatusType
