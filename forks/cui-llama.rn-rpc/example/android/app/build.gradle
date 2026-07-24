@@ -4,48 +4,65 @@ apply plugin: "com.facebook.react"
 
 def repoRootDir = new File(rootProject.projectDir, "../..").canonicalFile
 def rnllamaBuildFromSource = project.findProperty("rnllamaBuildFromSource")?.toString()?.toBoolean() ?: false
+// OpenCL/Hexagon are optional accelerator backends, each needing extra setup (git submodules
+// with real upstream history for OpenCL; a proprietary Qualcomm SDK for Hexagon) that a from-source
+// CPU/RPC-only build doesn't need. Neither task below was previously guarded by these flags, so
+// enabling rnllamaBuildFromSource unconditionally tried (and, in CI without that setup, failed)
+// both — opt in explicitly instead.
+def rnllamaBuildOpenCL = project.findProperty("rnllamaBuildOpenCL")?.toString()?.toBoolean() ?: false
+def rnllamaBuildHexagon = project.findProperty("rnllamaBuildHexagon")?.toString()?.toBoolean() ?: false
 
 if (rnllamaBuildFromSource) {
-    def openCLScript = new File(repoRootDir, "scripts/build-opencl.sh")
-    def openCLArtifacts = [new File(repoRootDir, "bin/arm64-v8a/libOpenCL.so")]
+    def preBuildDeps = []
 
-    tasks.register("prepareOpenCL", Exec) {
-        group = "build"
-        description = "Builds the OpenCL loader when libOpenCL.so is not present."
-        workingDir(repoRootDir)
-        commandLine(openCLScript.absolutePath)
-        onlyIf {
-            openCLArtifacts.any { !it.exists() }
+    if (rnllamaBuildOpenCL) {
+        def openCLScript = new File(repoRootDir, "scripts/build-opencl.sh")
+        def openCLArtifacts = [new File(repoRootDir, "bin/arm64-v8a/libOpenCL.so")]
+
+        tasks.register("prepareOpenCL", Exec) {
+            group = "build"
+            description = "Builds the OpenCL loader when libOpenCL.so is not present."
+            workingDir(repoRootDir)
+            commandLine(openCLScript.absolutePath)
+            onlyIf {
+                openCLArtifacts.any { !it.exists() }
+            }
         }
+        preBuildDeps << "prepareOpenCL"
     }
 
-    def htpScript = new File(repoRootDir, "scripts/build-hexagon-htp.sh")
-    def htpInputs = files(
-        htpScript,
-        new File(repoRootDir, "cpp/ggml-hexagon/htp/CMakeLists.txt"),
-        new File(repoRootDir, "cpp/ggml-hexagon/htp/htp_iface.idl"),
-    )
-    def htpArtifacts = files(
-        new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v69.so"),
-        new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v73.so"),
-        new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v75.so"),
-        new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v79.so"),
-        new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v81.so"),
-        new File(repoRootDir, "cpp/ggml-hexagon/htp/v73/htp_iface.h"),
-        new File(repoRootDir, "cpp/ggml-hexagon/htp/v73/htp_iface_stub.c"),
-    )
+    if (rnllamaBuildHexagon) {
+        def htpScript = new File(repoRootDir, "scripts/build-hexagon-htp.sh")
+        def htpInputs = files(
+            htpScript,
+            new File(repoRootDir, "cpp/ggml-hexagon/htp/CMakeLists.txt"),
+            new File(repoRootDir, "cpp/ggml-hexagon/htp/htp_iface.idl"),
+        )
+        def htpArtifacts = files(
+            new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v69.so"),
+            new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v73.so"),
+            new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v75.so"),
+            new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v79.so"),
+            new File(repoRootDir, "bin/arm64-v8a/libggml-htp-v81.so"),
+            new File(repoRootDir, "cpp/ggml-hexagon/htp/v73/htp_iface.h"),
+            new File(repoRootDir, "cpp/ggml-hexagon/htp/v73/htp_iface_stub.c"),
+        )
 
-    tasks.register("prepareHTP", Exec) {
-        group = "build"
-        description = "Builds and refreshes the generated Hexagon HTP artifacts."
-        workingDir(repoRootDir)
-        commandLine(htpScript.absolutePath)
-        inputs.files(htpInputs)
-        outputs.files(htpArtifacts)
+        tasks.register("prepareHTP", Exec) {
+            group = "build"
+            description = "Builds and refreshes the generated Hexagon HTP artifacts."
+            workingDir(repoRootDir)
+            commandLine(htpScript.absolutePath)
+            inputs.files(htpInputs)
+            outputs.files(htpArtifacts)
+        }
+        preBuildDeps << "prepareHTP"
     }
 
     tasks.named("preBuild").configure {
-        dependsOn("prepareOpenCL", "prepareHTP")
+        if (!preBuildDeps.isEmpty()) {
+            dependsOn(*preBuildDeps)
+        }
         delete(repoRootDir.absolutePath + "android/.cxx") // Clear cache of llama.rn
     }
 }
