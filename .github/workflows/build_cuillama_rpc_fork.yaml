@@ -1,0 +1,88 @@
+name: Build cui-llama.rn RPC fork (NDK from-source)
+
+# This workflow does the C++/NDK compile step the AI SECTOR A plan (steps A-C) required a local
+# machine with Android NDK/SDK for: it vendors ggml-rpc.cpp/.h + transport.cpp/.h into the
+# forks/cui-llama.rn-rpc/cpp/ tree (prefixed lm_ggml_/LM_GGML_ to match this fork's convention,
+# see forks/cui-llama.rn-rpc/RPC_FORK_NOTES.md), wires them into the CMake build with
+# -DLM_GGML_USE_RPC, and then actually compiles the native module from source here in CI —
+# something this cloud session cannot do locally (no NDK toolchain available).
+#
+# The build target is the library's own `example` React Native app (via react-native.config.js's
+# local-package link back to forks/cui-llama.rn-rpc), NOT ChatterUI — that keeps this workflow
+# self-contained and fast to iterate on while the RPC backend itself is being validated. Wiring
+# the fork into ChatterUI/HELIX is a separate follow-up once this compiles cleanly.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "forks/cui-llama.rn-rpc/**"
+      - ".github/workflows/build_cuillama_rpc_fork.yaml"
+
+jobs:
+  build_rpc_fork:
+    name: Compile ggml-rpc backend for Android (arm64-v8a)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./forks/cui-llama.rn-rpc
+    steps:
+      - name: Checkout the source code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: gradle
+
+      - name: Install Android SDK Platform + NDK 27.3.13750724
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36"
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.3.13750724"
+
+      # We are building the native module from source (RNLLAMA_BUILD_FROM_SOURCE below), so the
+      # prebuilt .so download in postinstall would be wasted work and an extra network dependency.
+      - name: Install library dependencies (skip prebuilt native artifact download)
+        env:
+          RNLLAMA_SKIP_POSTINSTALL: "1"
+        run: npm install --ignore-scripts
+
+      - name: Install example app dependencies
+        working-directory: ./forks/cui-llama.rn-rpc/example
+        env:
+          RNLLAMA_SKIP_POSTINSTALL: "1"
+        run: npm install --ignore-scripts
+
+      # The real checkpoint: compiles cpp/ggml-rpc.cpp + cpp/transport.cpp into the rnllama
+      # shared library with -DLM_GGML_USE_RPC set (see android/src/main/rnllama/CMakeLists.txt),
+      # then links the JNI wrapper. Restricted to arm64-v8a to keep CI time reasonable — that's
+      # the ABI covering effectively all modern Android phones anyway.
+      - name: Build example app (native module from source, RPC backend enabled)
+        working-directory: ./forks/cui-llama.rn-rpc/example/android
+        run: |
+          ./gradlew assembleDebug \
+            -PrnllamaBuildFromSource=true \
+            -PreactNativeArchitectures=arm64-v8a \
+            --stacktrace
+
+      - name: Upload built .so files (proof the RPC backend linked)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rnllama-rpc-native-libs
+          path: |
+            forks/cui-llama.rn-rpc/example/android/app/build/intermediates/merged_native_libs/**/lib/arm64-v8a/*rnllama*.so
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload example debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rnllama-rpc-example-apk
+          path: forks/cui-llama.rn-rpc/example/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+          if-no-files-found: warn

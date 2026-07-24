@@ -1,0 +1,11 @@
+
+{
+  "extends": "./tsconfig",
+  "exclude": [
+    "example",
+    "tests",
+    "third_party/llama.cpp",
+    "third_party/OpenCL-Headers",
+    "third_party/OpenCL-ICD-Loader"
+  ],
+}
