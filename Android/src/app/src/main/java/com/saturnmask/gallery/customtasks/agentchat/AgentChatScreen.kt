@@ -93,7 +93,9 @@ import com.saturnmask.gallery.common.RequestPermissionAgentAction
 import com.saturnmask.gallery.common.SkillProgressAgentAction
 import com.saturnmask.gallery.data.AgentSkillsURLs
 import com.saturnmask.gallery.data.BuiltInTaskId
+import com.saturnmask.gallery.data.ConfigKeys
 import com.saturnmask.gallery.data.Model
+import com.saturnmask.gallery.data.ModelCapability
 import com.saturnmask.gallery.data.Task
 import com.saturnmask.gallery.domain.rag.RagDocumentInfo
 import com.saturnmask.gallery.domain.websearch.WebSearchProvider
@@ -116,6 +118,7 @@ import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentActionPer
 import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentDisclaimerDialog
 import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentTools
 import com.saturnmask.gallery.customtasks.universalagent.isUniversalAgentAccessibilityServiceEnabled
+import com.saturnmask.gallery.customtasks.universalagent.requestIgnoreBatteryOptimizations
 import com.saturnmask.gallery.customtasks.universalagent.universalAgentEnablementStateFrom
 import com.saturnmask.gallery.ui.common.chat.ChatMessageWebView
 import com.saturnmask.gallery.ui.common.chat.ChatSide
@@ -126,7 +129,6 @@ import com.saturnmask.gallery.ui.llmchat.LlmChatScreen
 import com.saturnmask.gallery.ui.llmchat.LlmChatViewModel
 import com.saturnmask.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.saturnmask.gallery.ui.modelmanager.ModelManagerViewModel
-import com.google.ai.edge.litertlm.Message
 import java.lang.Exception
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
@@ -183,9 +185,6 @@ fun AgentChatScreen(
   // sheets, standalone toggle buttons, and Mobile Actions overflow-menu item.
   var showSkillsManagerBottomSheet by remember { mutableStateOf(false) }
   var showRagManagerBottomSheet by remember { mutableStateOf(false) }
-  // Roadmap "triggers": Reasoning has no state here because it's now driven by the existing
-  // native "Enable thinking" per-model switch (ConfigKeys.ENABLE_THINKING), the same one
-  // LlmChatScreen already uses — see ModelManagerViewModel.kt capabilityToTaskTypes change.
   var actionsEnabled by rememberSaveable { mutableStateOf(true) }
   var ragEnabled by rememberSaveable { mutableStateOf(true) }
   // Independent on/off for the "Web search" trigger chip — previously there was no real state
@@ -324,6 +323,8 @@ fun AgentChatScreen(
       task,
       curSystemPrompt,
       agentTools,
+      initialMessages =
+        llmChatUiState.messagesByModel[modelManagerUiState.selectedModel.name] ?: emptyList(),
       clearHistory = false,
       actionsEnabled = actionsEnabled,
       ragEnabled = ragEnabled,
@@ -360,6 +361,8 @@ fun AgentChatScreen(
       task,
       curSystemPrompt,
       agentTools,
+      initialMessages =
+        llmChatUiState.messagesByModel[modelManagerUiState.selectedModel.name] ?: emptyList(),
       clearHistory = false,
       actionsEnabled = actionsEnabled,
       ragEnabled = ragEnabled,
@@ -393,6 +396,8 @@ fun AgentChatScreen(
       task,
       curSystemPrompt,
       agentTools,
+      initialMessages =
+        llmChatUiState.messagesByModel[modelManagerUiState.selectedModel.name] ?: emptyList(),
       clearHistory = false,
       actionsEnabled = actionsEnabled,
       ragEnabled = ragEnabled,
@@ -607,6 +612,11 @@ fun AgentChatScreen(
           task,
           curSystemPrompt,
           agentTools,
+          // Preserve the conversation across this toggle — this is a mode switch, not a "start
+          // over" action, and the replay mechanism is already there (see the RAG-documents-changed
+          // effect further down for the same pattern).
+          initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+          clearHistory = false,
           actionsEnabled = actionsEnabled,
           ragEnabled = ragEnabled,
           mobileActionsEnabled = mobileActionsEnabled,
@@ -630,7 +640,7 @@ fun AgentChatScreen(
     // with no separate progress UI needed here. The onResult callback below is just for the
     // messenger-style "attached a file" bubble in the chat itself.
     onFilePicked = { uri ->
-      ragManagerViewModel.importDocument(uri) { result ->
+      ragManagerViewModel.importDocumentForChat(uri) { result ->
         result
           .onSuccess { info ->
             viewModel.addMessage(
@@ -823,6 +833,16 @@ fun AgentChatScreen(
       // ragSearch/RagManagerBottomSheet, and Actions/Web Search likewise don't apply to the
       // file-scoped Coder tab — showing this row there would be actively misleading.
       if (task.id === BuiltInTaskId.LLM_AGENT_CHAT) {
+        // Reasoning is a thin toggle over the pre-existing native "Enable thinking" per-model
+        // switch (ConfigKeys.ENABLE_THINKING) — not a rememberSaveable of its own, so it stays in
+        // sync with the Config dialog's own switch. needReinitialization = false on that config
+        // means flipping it here doesn't need a session reset (see Config.kt).
+        val showReasoningToggle =
+          task.allowCapability(ModelCapability.LLM_THINKING, selectedModel)
+        val reasoningEnabled =
+          remember(selectedModel.name, modelManagerUiState.configValuesUpdateTrigger) {
+            selectedModel.getBooleanConfigValue(key = ConfigKeys.ENABLE_THINKING, defaultValue = false)
+          }
         AgentModeTriggers(
           actionsEnabled = actionsEnabled,
           ragEnabled = ragEnabled,
@@ -834,6 +854,13 @@ fun AgentChatScreen(
           ragIndexing = ragUiState.importing,
           ragIndexingDone = ragUiState.importProgress?.done ?: 0,
           ragIndexingTotal = ragUiState.importProgress?.total ?: 0,
+          showReasoningToggle = showReasoningToggle,
+          reasoningEnabled = reasoningEnabled,
+          onReasoningToggled = { enabled ->
+            selectedModel.configValues =
+              selectedModel.configValues + (ConfigKeys.ENABLE_THINKING.label to enabled)
+            modelManagerViewModel.updateConfigValuesUpdateTrigger()
+          },
           onActionsToggled = { enabled ->
             actionsEnabled = enabled
             resetSessionWithCurrentSkillsAndMcps(
@@ -843,6 +870,8 @@ fun AgentChatScreen(
               task,
               curSystemPrompt,
               agentTools,
+              initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+              clearHistory = false,
               actionsEnabled = enabled,
               ragEnabled = ragEnabled,
               mobileActionsEnabled = mobileActionsEnabled,
@@ -864,6 +893,8 @@ fun AgentChatScreen(
               task,
               curSystemPrompt,
               agentTools,
+              initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+              clearHistory = false,
               actionsEnabled = actionsEnabled,
               ragEnabled = enabled,
               mobileActionsEnabled = mobileActionsEnabled,
@@ -887,6 +918,8 @@ fun AgentChatScreen(
               task,
               curSystemPrompt,
               agentTools,
+              initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+              clearHistory = false,
               actionsEnabled = actionsEnabled,
               ragEnabled = ragEnabled,
               mobileActionsEnabled = mobileActionsEnabled,
@@ -1102,6 +1135,10 @@ fun AgentChatScreen(
         if (!universalAgentServiceEnabled) {
           context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        // The AccessibilityService itself has no foreground-service protection — ask to be
+        // exempted from OEM battery-optimization killing too, or aggressive battery managers can
+        // silently kill it in the background. No-op if already exempted.
+        requestIgnoreBatteryOptimizations(context)
         resetSessionWithCurrentSkillsAndMcps(
           viewModel,
           modelManagerViewModel,
@@ -1109,6 +1146,8 @@ fun AgentChatScreen(
           task,
           curSystemPrompt,
           agentTools,
+          initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+          clearHistory = false,
           actionsEnabled = actionsEnabled,
           ragEnabled = ragEnabled,
           mobileActionsEnabled = mobileActionsEnabled,
@@ -1144,6 +1183,8 @@ fun AgentChatScreen(
           task,
           curSystemPrompt,
           agentTools,
+          initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+          clearHistory = false,
           actionsEnabled = actionsEnabled,
           ragEnabled = ragEnabled,
           mobileActionsEnabled = enabled,
@@ -1166,6 +1207,8 @@ fun AgentChatScreen(
             task,
             curSystemPrompt,
             agentTools,
+            initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+            clearHistory = false,
             actionsEnabled = actionsEnabled,
             ragEnabled = ragEnabled,
             mobileActionsEnabled = mobileActionsEnabled,
@@ -1194,6 +1237,8 @@ fun AgentChatScreen(
           task,
           curSystemPrompt,
           agentTools,
+          initialMessages = llmChatUiState.messagesByModel[selectedModel.name] ?: emptyList(),
+          clearHistory = false,
           actionsEnabled = actionsEnabled,
           ragEnabled = enabled,
           mobileActionsEnabled = mobileActionsEnabled,
@@ -1296,15 +1341,7 @@ private fun resetSessionWithCurrentSkillsAndMcps(
   webSearchEnabled: Boolean = true,
 ) {
   val model = modelManagerViewModel.uiState.value.selectedModel
-  val litertMessages = initialMessages.mapNotNull { chatMessage ->
-    if (chatMessage is ChatMessageText) {
-      if (chatMessage.side == ChatSide.USER) {
-        Message.user(chatMessage.content)
-      } else {
-        Message.model(chatMessage.content)
-      }
-    } else null
-  }
+  val litertMessages = initialMessages.toLiteRtMessages()
   val toolsPrompt = agentTools.mcpManagerViewModel.getToolsPrompt()
   val actualSystemPrompt = getEffectiveBaseSystemPrompt(curSystemPrompt, toolsPrompt.isNotEmpty())
   val engineConfiguration =

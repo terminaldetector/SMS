@@ -24,7 +24,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saturnmask.gallery.AppLifecycleProvider
 import com.saturnmask.gallery.BuildConfig
-import com.saturnmask.gallery.R
 import com.saturnmask.gallery.common.ProjectConfig
 import com.saturnmask.gallery.common.SystemPromptHelper
 import com.saturnmask.gallery.common.getJsonResponse
@@ -33,7 +32,6 @@ import com.saturnmask.gallery.customtasks.common.CustomTask
 import com.saturnmask.gallery.data.Accelerator
 import com.saturnmask.gallery.data.BuiltInTaskId
 import com.saturnmask.gallery.data.Category
-import com.saturnmask.gallery.data.CategoryInfo
 import com.saturnmask.gallery.data.Config
 import com.saturnmask.gallery.data.ConfigKeys
 import com.saturnmask.gallery.data.DataStoreRepository
@@ -57,6 +55,7 @@ import com.saturnmask.gallery.proto.ImportedModel
 import com.saturnmask.gallery.proto.Theme
 import com.saturnmask.gallery.runtime.aicore.AICoreModelHelper
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Message
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -401,6 +400,10 @@ constructor(
     force: Boolean = false,
     onDone: () -> Unit = {},
     onError: (String) -> Unit = {},
+    // Prior conversation turns to replay into the freshly-created engine, so a forced
+    // reinitialization (e.g. switching Accelerator in the Config dialog) doesn't silently forget
+    // the chat — see ModelPageAppBar.kt's ConfigDialog.onOk, the one caller that passes this.
+    initialMessages: List<Message> = listOf(),
   ) {
     viewModelScope.launch {
       // Skip if initialized already.
@@ -465,6 +468,7 @@ constructor(
             model = model,
             systemInstruction = Contents.of(systemPrompt),
             onDone = onDoneFn,
+            initialMessages = initialMessages,
           )
       }
     }
@@ -1213,9 +1217,6 @@ constructor(
   private fun groupTasksByCategory(): Map<String, List<Task>> {
     val tasks = getActiveCustomTasks().map { it.task }
 
-    val categoryMap: Map<String, CategoryInfo> =
-      tasks.associateBy { it.category.id }.mapValues { it.value.category }
-
     val groupedTasks = tasks.groupBy { it.category.id }
     val groupedSortedTasks: MutableMap<String, List<Task>> = mutableMapOf()
     // Sort the tasks in categories by pre-defined order. Sort other tasks by label.
@@ -1237,11 +1238,13 @@ constructor(
             } else if (indexB != -1) {
               1
             } else {
-              val ca = categoryMap[a.id]!!
-              val cb = categoryMap[b.id]!!
-              val caLabel = getCategoryLabel(context = context, category = ca)
-              val cbLabel = getCategoryLabel(context = context, category = cb)
-              caLabel.compareTo(cbLabel)
+              // Neither task is in the predefined order — same fallback as the non-LLM branch
+              // below. (Previously looked up a "category" comparison here via a task-id-keyed
+              // map that was actually keyed by category id, so the lookup always missed and
+              // threw NullPointerException the moment two LLM-category tasks were both absent
+              // from PREDEFINED_LLM_TASK_ORDER — comparing by category was also moot anyway,
+              // since every task compared here already shares the same category.)
+              a.label.compareTo(b.label)
             }
           } else {
             a.label.compareTo(b.label)
@@ -1254,17 +1257,6 @@ constructor(
     }
 
     return groupedSortedTasks
-  }
-
-  private fun getCategoryLabel(context: Context, category: CategoryInfo): String {
-    val stringRes = category.labelStringRes
-    val label = category.label
-    if (stringRes != null) {
-      return context.getString(stringRes)
-    } else if (label != null) {
-      return label
-    }
-    return context.getString(R.string.category_unlabeled)
   }
 
   /**

@@ -33,10 +33,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -68,8 +70,11 @@ import com.saturnmask.gallery.domain.rag.RagDocumentInfo
  * Skills settings also cover MCP tools and Mobile Actions (the unified Skills sheet), so the whole
  * RAG / Web search / MCP / Agent-actions system is reachable from these three icons.
  *
- * Reasoning is deliberately NOT one of these — it's driven by the pre-existing native "Enable
- * thinking" per-model switch (`ConfigKeys.ENABLE_THINKING`).
+ * Reasoning is a 4th icon, shown only when the current model supports it
+ * ([showReasoningToggle] gated by `task.allowCapability(ModelCapability.LLM_THINKING, model)` at
+ * the call site) — it's a thin toggle over the pre-existing native "Enable thinking" per-model
+ * switch (`ConfigKeys.ENABLE_THINKING`), not a separate feature of its own, so it has no long-press
+ * settings sheet.
  */
 @Composable
 fun AgentModeTriggers(
@@ -97,6 +102,9 @@ fun AgentModeTriggers(
   // plain spinner instead of a fraction.
   ragIndexingDone: Int = 0,
   ragIndexingTotal: Int = 0,
+  showReasoningToggle: Boolean = false,
+  reasoningEnabled: Boolean = false,
+  onReasoningToggled: (Boolean) -> Unit = {},
 ) {
   Row(
     modifier = modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -140,6 +148,18 @@ fun AgentModeTriggers(
         "Web search ${if (webSearchEnabled) "enabled" else "disabled"} ($webSearchCaption). " +
           "Tap to toggle, long-press for web search settings.",
     )
+
+    if (showReasoningToggle) {
+      TriggerIconToggle(
+        selected = reasoningEnabled,
+        onToggle = { onReasoningToggled(!reasoningEnabled) },
+        onSettings = {},
+        iconSelected = Icons.Filled.Psychology,
+        iconUnselected = Icons.Outlined.Psychology,
+        contentDescription =
+          "Reasoning ${if (reasoningEnabled) "enabled" else "disabled"}. Tap to toggle.",
+      )
+    }
   }
 }
 

@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.Dp
 import com.saturnmask.gallery.common.Classification
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.PromptTemplate
+import com.google.ai.edge.litertlm.Message
 
 private const val TAG = "AGChatMessage"
 
@@ -434,5 +435,21 @@ class ChatMessageThinking(
       hideSenderLabel = hideSenderLabel,
       accelerator = accelerator,
     )
+  }
+}
+
+/**
+ * Converts visible chat bubbles into the litertlm engine's replay format, for reseeding a
+ * conversation's memory across a session reset (see `LlmModelHelper.initialize`/
+ * `resetConversation`'s `initialMessages` parameter). Only [ChatMessageText] entries carry real
+ * conversational content — info/warning/error/progress-panel/etc. messages are UI-only and have no
+ * engine-side equivalent, so they're silently dropped rather than replayed.
+ */
+fun List<ChatMessage>.toLiteRtMessages(): List<Message> = mapNotNull { chatMessage ->
+  if (chatMessage is ChatMessageText) {
+    if (chatMessage.side == ChatSide.USER) Message.user(chatMessage.content)
+    else Message.model(chatMessage.content)
+  } else {
+    null
   }
 }

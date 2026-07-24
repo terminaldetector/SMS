@@ -31,6 +31,7 @@ import com.saturnmask.gallery.domain.rag.EmbedderSettingsStore
 import com.saturnmask.gallery.domain.rag.EmbedderSource
 import com.saturnmask.gallery.domain.rag.FallbackTextEmbedder
 import com.saturnmask.gallery.domain.rag.RagDocumentInfo
+import com.saturnmask.gallery.domain.rag.RagDocumentPriority
 import com.saturnmask.gallery.domain.rag.RagEngine
 import com.saturnmask.gallery.domain.rag.RagMode
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -134,8 +135,28 @@ constructor(
   }
 
   fun importDocument(uri: Uri, onResult: (Result<RagDocumentInfo>) -> Unit = {}) {
+    importDocumentAs(uri, mode = _uiState.value.selectedMode, onResult = onResult)
+  }
+
+  /**
+   * Always imports as [RagMode.DYNAMIC] (scoped to the current chat session), regardless of the
+   * library sheet's [RagManagerUiState.selectedMode] toggle. Use this for the chat's own inline
+   * "+ -> Attach file" flow — attaching a file directly to a message is inherently a per-chat
+   * action and must not silently fall back to whatever mode the separate library-management sheet
+   * last happened to be set to (that was the bug: in-chat attachments were getting folded
+   * permanently into the persistent static index). Mirrors the explicit
+   * `mode = RagMode.DYNAMIC` hardcode already used by `CoderProjectIndexer` for the same reason.
+   */
+  fun importDocumentForChat(uri: Uri, onResult: (Result<RagDocumentInfo>) -> Unit = {}) {
+    importDocumentAs(uri, mode = RagMode.DYNAMIC, onResult = onResult)
+  }
+
+  private fun importDocumentAs(
+    uri: Uri,
+    mode: RagMode,
+    onResult: (Result<RagDocumentInfo>) -> Unit,
+  ) {
     viewModelScope.launch {
-      val mode = _uiState.value.selectedMode
       _uiState.update { it.copy(importing = true, importProgress = null, error = null) }
       val displayName = queryDisplayName(uri) ?: "document"
       val result =
@@ -160,6 +181,13 @@ constructor(
   fun removeDocument(documentId: String) {
     viewModelScope.launch {
       ragEngine.removeDocument(documentId)
+      refresh()
+    }
+  }
+
+  fun setDocumentPriority(documentId: String, priority: RagDocumentPriority) {
+    viewModelScope.launch {
+      ragEngine.setDocumentPriority(documentId, priority)
       refresh()
     }
   }

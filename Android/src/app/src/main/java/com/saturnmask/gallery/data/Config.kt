@@ -318,7 +318,15 @@ fun createLlmChatConfigs(
       .toMutableList()
 
   if (supportThinking) {
-    configs.add(BooleanSwitchConfig(key = ConfigKeys.ENABLE_THINKING, defaultValue = false))
+    // Purely a per-message extraContext flag (LlmChatViewModel reads it fresh on every send) —
+    // never consumed at model-init time, so flipping it doesn't need a full model reload.
+    configs.add(
+      BooleanSwitchConfig(
+        key = ConfigKeys.ENABLE_THINKING,
+        defaultValue = false,
+        needReinitialization = false,
+      )
+    )
   }
   if (supportSpeculativeDecoding) {
     configs.add(

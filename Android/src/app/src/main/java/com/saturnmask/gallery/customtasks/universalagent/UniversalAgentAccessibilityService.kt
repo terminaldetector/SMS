@@ -19,6 +19,10 @@ package com.saturnmask.gallery.customtasks.universalagent
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
@@ -73,4 +77,30 @@ fun isUniversalAgentAccessibilityServiceEnabled(context: Context): Boolean {
       it.resolveInfo.serviceInfo.packageName == context.packageName &&
         it.resolveInfo.serviceInfo.name == UniversalAgentAccessibilityService::class.java.name
     }
+}
+
+/**
+ * An `AccessibilityService` isn't a foreground service and gets no special OS protection of its
+ * own — aggressive OEM battery managers (MIUI/HyperOS, EMUI, ColorOS, etc.) can and do kill
+ * background accessibility services outright, silently breaking Universal Agent's whole
+ * app-scoping feature with no visible error to the user. Scoped to Universal Agent only — this is
+ * not a general app-wide battery-exemption nag.
+ */
+fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+  val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+  return powerManager.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+/** Launches the system dialog letting the user exempt this app from battery optimization. No-op
+ *  (returns false) if the OS already exempts it, since re-requesting would just reopen the
+ *  dialog for nothing. */
+fun requestIgnoreBatteryOptimizations(context: Context): Boolean {
+  if (isIgnoringBatteryOptimizations(context)) return false
+  context.startActivity(
+    Intent(
+      Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+      Uri.parse("package:${context.packageName}"),
+    )
+  )
+  return true
 }

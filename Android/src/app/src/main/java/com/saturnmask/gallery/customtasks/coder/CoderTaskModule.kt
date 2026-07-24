@@ -31,6 +31,7 @@ import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.Task
 import com.saturnmask.gallery.ui.llmchat.LlmChatModelHelper
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.tool
 import dagger.Module
 import dagger.Provides
@@ -93,6 +94,7 @@ class CoderTask @Inject constructor() : CustomTask {
     model: Model,
     systemInstruction: Contents?,
     onDone: (String) -> Unit,
+    initialMessages: List<Message>,
   ) {
     val initialSystemPrompt = systemInstruction?.toString() ?: task.defaultSystemPrompt
     coroutineScope.launch(Dispatchers.Default) {
@@ -108,6 +110,7 @@ class CoderTask @Inject constructor() : CustomTask {
         systemInstruction = Contents.of(initialSystemPrompt),
         tools = listOfNotNull(tool(agentTools), if (hasProject) tool(coderTools) else null),
         enableConversationConstrainedDecoding = false,
+        initialMessages = initialMessages,
       )
     }
   }

@@ -37,6 +37,7 @@ import com.saturnmask.gallery.proto.McpServers
 import com.saturnmask.gallery.proto.Skill
 import com.saturnmask.gallery.ui.llmchat.LlmChatModelHelper
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Message
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -160,6 +161,7 @@ class AgentChatTask @Inject constructor() : CustomTask {
     model: Model,
     systemInstruction: Contents?,
     onDone: (String) -> Unit,
+    initialMessages: List<Message>,
   ) {
     val initialSystemPrompt = systemInstruction?.toString() ?: task.defaultSystemPrompt
     coroutineScope.launch(Dispatchers.Default) {
@@ -208,6 +210,7 @@ class AgentChatTask @Inject constructor() : CustomTask {
         // model family it's named for or any other, off until the actual failure mode is
         // understood, not just gated by family the way supportImage/supportAudio are above.
         enableConversationConstrainedDecoding = false,
+        initialMessages = initialMessages,
       )
     }
   }

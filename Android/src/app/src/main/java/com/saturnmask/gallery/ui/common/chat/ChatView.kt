@@ -331,6 +331,7 @@ fun ChatView(
               allowEditingSystemPrompt = allowEditingSystemPrompt,
               curSystemPrompt = curSystemPrompt,
               onSystemPromptChanged = onSystemPromptChanged,
+              getCurrentMessages = { currentMessages },
               onHistoryClicked = {
                 Log.d(
                   TAG,

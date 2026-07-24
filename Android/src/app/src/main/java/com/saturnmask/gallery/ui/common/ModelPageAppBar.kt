@@ -60,6 +60,8 @@ import com.saturnmask.gallery.data.ModelDownloadStatusType
 import com.saturnmask.gallery.data.RuntimeType
 import com.saturnmask.gallery.data.Task
 import com.saturnmask.gallery.data.convertValueToTargetType
+import com.saturnmask.gallery.ui.common.chat.ChatMessage
+import com.saturnmask.gallery.ui.common.chat.toLiteRtMessages
 import com.saturnmask.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.saturnmask.gallery.ui.modelmanager.ModelManagerViewModel
 
@@ -84,6 +86,10 @@ fun ModelPageAppBar(
   onSystemPromptChanged: (String) -> Unit = {},
   shouldShowHistoryButton: Boolean = false,
   onHistoryClicked: (Model) -> Unit = {},
+  // The chat's current visible messages, so a config change that forces reinitialization (e.g.
+  // switching Accelerator) can replay them into the freshly-created engine instead of silently
+  // losing the conversation — see the needReinitialization branch below.
+  getCurrentMessages: () -> List<ChatMessage> = { emptyList() },
 ) {
   var showConfigDialog by remember { mutableStateOf(false) }
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
@@ -275,6 +281,9 @@ fun ModelPageAppBar(
                   onSystemPromptChanged(newSystemPrompt)
                 }
               },
+              // A forced reinit (e.g. switching Accelerator) always creates a brand-new engine —
+              // replay the current chat into it so the conversation isn't silently forgotten.
+              initialMessages = getCurrentMessages().toLiteRtMessages(),
             )
           }
 

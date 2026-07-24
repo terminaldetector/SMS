@@ -44,6 +44,8 @@ private const val INDEX_FILE_NAME = "rag_index.json"
 // document just reports every chunk (step ends up being 1).
 private const val MAX_PROGRESS_UPDATES = 30
 private const val PREVIEW_LENGTH = 150
+private const val RETRIEVAL_BOOST_CAP = 0.2f
+private const val RETRIEVAL_BOOST_RATE = 0.3f
 
 internal data class PersistedChunk(val index: Int, val text: String, val vector: FloatArray) {
   override fun equals(other: Any?) = this === other
@@ -56,6 +58,11 @@ internal data class PersistedDocument(
   val sizeBytes: Long,
   val addedAtMillis: Long,
   val chunks: List<PersistedChunk>,
+  var priority: RagDocumentPriority = RagDocumentPriority.NORMAL,
+  // How many times one of this document's chunks has landed in a search's top-K results —
+  // folds into search() as a small, capped automatic boost so documents that keep proving useful
+  // drift upward over time, independent of the manually-set priority above.
+  var retrievalCount: Int = 0,
 )
 
 internal data class PersistedIndex(val embedderId: String?, val documents: List<PersistedDocument>)
@@ -161,6 +168,12 @@ constructor(
             sizeBytes = text.length.toLong(),
             addedAtMillis = System.currentTimeMillis(),
             chunks = chunks,
+            // Automatic priority default: a document the user just attached directly to this
+            // chat is clearly relevant right now; a library document added ahead of time isn't
+            // singled out that way, so it starts neutral.
+            priority =
+              if (mode == RagMode.DYNAMIC && sessionId != null) RagDocumentPriority.HIGH
+              else RagDocumentPriority.NORMAL,
           )
 
         val scope =
@@ -201,6 +214,29 @@ constructor(
   override suspend fun clear() =
     withContext(Dispatchers.IO) { lock.withLock { persistLocked(emptyList()) } }
 
+  override suspend fun setDocumentPriority(documentId: String, priority: RagDocumentPriority) =
+    withContext(Dispatchers.IO) {
+      val foundInStatic =
+        lock.withLock {
+          val docs = loadLocked()
+          val doc = docs.firstOrNull { it.id == documentId }
+          if (doc != null) {
+            doc.priority = priority
+            persistLocked(docs)
+          }
+          doc != null
+        }
+      if (!foundInStatic) {
+        for (docs in dynamicDocs.values) {
+          val doc = docs.firstOrNull { it.id == documentId }
+          if (doc != null) {
+            doc.priority = priority
+            break
+          }
+        }
+      }
+    }
+
   override suspend fun listDocuments(sessionId: String?): List<RagDocumentInfo> =
     withContext(Dispatchers.IO) {
       val staticDocs = lock.withLock { loadLocked().toList() }.map { it.toInfo(RagMode.STATIC) }
@@ -215,21 +251,48 @@ constructor(
       val staticDocs = lock.withLock { loadLocked().toList() }
       val dynamicForSession = sessionId?.let { dynamicDocs[it]?.toList() }.orEmpty()
 
-      (staticDocs + dynamicForSession)
-        .asSequence()
-        .flatMap { doc -> doc.chunks.asSequence().map { chunk -> doc to chunk } }
-        .map { (doc, chunk) ->
-          RagSearchResult(
-            documentId = doc.id,
-            documentName = doc.name,
-            chunkIndex = chunk.index,
-            text = chunk.text,
-            similarity = cosineSimilarity(queryVector, chunk.vector),
-          )
-        }
-        .sortedByDescending { it.similarity }
-        .take(topK)
-        .toList()
+      // weightedScore only decides ranking/take(topK) — RagSearchResult.similarity stays raw
+      // cosine similarity in [0, 1], since it's surfaced to the model/UI as a literal similarity
+      // score (see CoderTools.kt/AgentTools.kt's "similarity 0.xx" prompt text).
+      val ranked =
+        (staticDocs + dynamicForSession)
+          .asSequence()
+          .flatMap { doc -> doc.chunks.asSequence().map { chunk -> doc to chunk } }
+          .map { (doc, chunk) ->
+            val similarity = cosineSimilarity(queryVector, chunk.vector)
+            val weightedScore =
+              similarity * priorityMultiplier(doc.priority) * (1f + retrievalBoost(doc.retrievalCount))
+            Triple(
+              doc,
+              weightedScore,
+              RagSearchResult(
+                documentId = doc.id,
+                documentName = doc.name,
+                chunkIndex = chunk.index,
+                text = chunk.text,
+                similarity = similarity,
+              ),
+            )
+          }
+          .sortedByDescending { it.second }
+          .take(topK)
+          .toList()
+
+      // Mutating doc.retrievalCount here mutates the same PersistedDocument instances held in
+      // the static-index cache (staticDocs is a shallow copy — its elements are the same
+      // references), so re-persisting the cache below picks up these increments for free.
+      val topDocs = ranked.map { it.first }.distinct()
+      val staticDocIds = staticDocs.mapTo(HashSet()) { it.id }
+      var touchedStatic = false
+      for (doc in topDocs) {
+        doc.retrievalCount++
+        if (doc.id in staticDocIds) touchedStatic = true
+      }
+      if (touchedStatic) {
+        lock.withLock { persistLocked(loadLocked()) }
+      }
+
+      ranked.map { it.third }
     }
 
   private fun PersistedDocument.toInfo(scope: RagMode) =
@@ -241,7 +304,20 @@ constructor(
       addedAtMillis = addedAtMillis,
       previewText = buildPreview(chunks.firstOrNull()?.text.orEmpty()),
       scope = scope,
+      priority = priority,
     )
+
+  private fun priorityMultiplier(priority: RagDocumentPriority): Float =
+    when (priority) {
+      RagDocumentPriority.LOW -> 0.7f
+      RagDocumentPriority.NORMAL -> 1.0f
+      RagDocumentPriority.HIGH -> 1.3f
+    }
+
+  // Small, capped boost from how often a document has actually proven useful before — self-limiting
+  // (approaches but never reaches +20%) so one popular document can't runaway-dominate every result.
+  private fun retrievalBoost(retrievalCount: Int): Float =
+    (RETRIEVAL_BOOST_CAP * (1f - 1f / (1f + retrievalCount * RETRIEVAL_BOOST_RATE)))
 
   private fun buildPreview(text: String): String {
     val collapsed = text.replace(Regex("\\s+"), " ").trim()
