@@ -16,10 +16,14 @@
 
 package com.saturnmask.gallery.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Menu
@@ -39,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -123,6 +128,16 @@ fun ModelPageAppBar(
             modelManagerViewModel = modelManagerViewModel,
             onModelSelected = onModelSelected,
           )
+        }
+
+        // Which backend (CPU/GPU/NPU) the model actually initialized with — can differ from the
+        // user's requested Accelerator config if the NPU->GPU->CPU fallback chain kicked in.
+        // AICore models don't go through LlmChatModelHelper/Backend at all, so this stays null
+        // (and hidden) for them.
+        if (isModelInitialized && model.runtimeType != RuntimeType.AICORE) {
+          model.lastActiveAccelerator?.let { activeAccelerator ->
+            BackendBadge(accelerator = activeAccelerator, modifier = Modifier.padding(top = 2.dp))
+          }
         }
       }
     },
@@ -272,6 +287,20 @@ fun ModelPageAppBar(
         allowEditingSystemPrompt && model.runtimeType != RuntimeType.AICORE,
       defaultSystemPrompt = task.defaultSystemPrompt,
       curSystemPrompt = curSystemPrompt,
+    )
+  }
+}
+
+@Composable
+private fun BackendBadge(accelerator: String, modifier: Modifier = Modifier) {
+  Box(
+    modifier = modifier.clip(CircleShape).background(MaterialTheme.colorScheme.tertiaryContainer)
+  ) {
+    Text(
+      stringResource(R.string.model_page_active_backend, accelerator),
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onTertiaryContainer,
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
     )
   }
 }

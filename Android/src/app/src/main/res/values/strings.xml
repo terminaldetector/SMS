@@ -594,6 +594,8 @@
   <string name="config_label_use_gpu" translatable="true">Use GPU</string>
   <!-- Label for the 'Accelerator' option in the model configuration dialog. [CHAR_LIMIT=NONE] -->
   <string name="config_label_accelerator" translatable="true">Accelerator</string>
+  <!-- Badge in the chat top app bar showing which backend the model actually initialized with (may differ from the requested Accelerator if a fallback occurred). [CHAR_LIMIT=NONE] -->
+  <string name="model_page_active_backend" translatable="true">Running on %1$s</string>
   <!-- Label for the 'Vision accelerator' option in the model configuration dialog. [CHAR_LIMIT=NONE] -->
   <string name="config_label_vision_accelerator" translatable="true">Vision accelerator</string>
   <!-- Label for the 'Compatible accelerators' option in the model configuration dialog. [CHAR_LIMIT=NONE] -->

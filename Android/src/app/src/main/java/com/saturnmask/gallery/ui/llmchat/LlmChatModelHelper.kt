@@ -104,17 +104,32 @@ object LlmChatModelHelper : LlmModelHelper {
     // (declared support in the allowlist/import metadata is a claim, not a guarantee).
     var shouldEnableImage = supportImage
     var shouldEnableAudio = supportAudio
-    val preferredBackend =
-      when (accelerator) {
-        Accelerator.CPU.label -> Backend.CPU(numOfThreads = numThreads)
-        Accelerator.GPU.label -> Backend.GPU()
-        Accelerator.NPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        Accelerator.TPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        else -> Backend.CPU(numOfThreads = numThreads)
+
+    fun backendFor(acc: Accelerator): Backend =
+      when (acc) {
+        Accelerator.CPU -> Backend.CPU(numOfThreads = numThreads)
+        Accelerator.GPU -> Backend.GPU()
+        Accelerator.NPU,
+        Accelerator.TPU -> Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
       }
-    Log.d(TAG, "Preferred backend: $preferredBackend")
+    val requestedAccelerator =
+      Accelerator.values().firstOrNull { it.label == accelerator } ?: Accelerator.CPU
+    // Manual NPU->GPU->CPU fallback: LiteRT-LM's Backend.GPU()/Backend.NPU() have no automatic
+    // cross-backend fallback of their own (see e.g. google-ai-edge/LiteRT-LM#2114 — a GPU compiler
+    // crash on some devices surfaces straight to the user with no retry). model.accelerators is
+    // already the correct, per-device-adjusted list of backends this model supports (Pixel's
+    // NPU->TPU rename and Pixel 10's GPU removal are baked in via ModelAllowlist.kt), so the
+    // fallback only tries backends this model actually declares, with CPU always guaranteed as the
+    // unconditional last resort (LiteRT-LM's CPU backend runs any model file, just slower). The
+    // user's requested backend is always tried first — never silently overridden.
+    val backendPriority = listOf(Accelerator.NPU, Accelerator.TPU, Accelerator.GPU, Accelerator.CPU)
+    val fallbackOrder =
+      (listOf(requestedAccelerator) + backendPriority.filter { it in model.accelerators })
+        .distinct()
+        .let { if (Accelerator.CPU in it) it else it + Accelerator.CPU }
+    var backendIndex = 0
+    var preferredBackend = backendFor(fallbackOrder[backendIndex])
+    Log.d(TAG, "Preferred backend: $preferredBackend (fallback order: $fallbackOrder)")
 
     val modelPath = model.getPath(context = context)
     fun buildEngineConfig() =
@@ -165,7 +180,8 @@ object LlmChatModelHelper : LlmModelHelper {
       // support) — the only signal is engine creation itself failing with a NOT_FOUND error
       // naming the missing encoder. So: try with what was declared, and if that specific failure
       // shows up, drop that one modality and retry rather than surfacing a hard crash. At most
-      // two retries (one per modality), so this can't loop forever on an unrelated failure.
+      // two modality retries (one per modality) plus at most fallbackOrder.size-1 backend
+      // fallbacks, so this can't loop forever on an unrelated failure.
       lateinit var engine: Engine
       while (true) {
         try {
@@ -180,11 +196,20 @@ object LlmChatModelHelper : LlmModelHelper {
           } else if (shouldEnableAudio && message.contains("AUDIO_ENCODER", ignoreCase = true)) {
             Log.w(TAG, "Model '${model.name}' has no audio encoder; retrying without audio support.")
             shouldEnableAudio = false
+          } else if (backendIndex < fallbackOrder.lastIndex) {
+            Log.w(
+              TAG,
+              "Backend ${fallbackOrder[backendIndex]} failed to initialize for model " +
+                "'${model.name}' (${e.message}); falling back to ${fallbackOrder[backendIndex + 1]}.",
+            )
+            backendIndex++
+            preferredBackend = backendFor(fallbackOrder[backendIndex])
           } else {
             throw e
           }
         }
       }
+      model.lastActiveAccelerator = fallbackOrder[backendIndex].label
       // Correct the in-memory Model (so the UI's attach-image/attach-audio buttons stop offering
       // a modality this model can't do, this session) and persist it via ModelCapabilityOverrideStore
       // so later app launches start from the known-true value instead of repeating this same
@@ -254,13 +279,19 @@ object LlmChatModelHelper : LlmModelHelper {
           key = ConfigKeys.ACCELERATOR,
           defaultValue = Accelerator.GPU.label,
         )
+      // Use the backend the engine was actually created with, not the requested config value —
+      // they can disagree once the NPU->GPU->CPU fallback chain in initialize() has kicked in.
+      val effectiveAccelerator = model.lastActiveAccelerator ?: accelerator
       ExperimentalFlags.enableConversationConstrainedDecoding =
         enableConversationConstrainedDecoding
       val newConversation =
         engine.createConversation(
           ConversationConfig(
             samplerConfig =
-              if (accelerator == Accelerator.NPU.label || accelerator == Accelerator.TPU.label) {
+              if (
+                effectiveAccelerator == Accelerator.NPU.label ||
+                  effectiveAccelerator == Accelerator.TPU.label
+              ) {
                 null
               } else {
                 SamplerConfig(

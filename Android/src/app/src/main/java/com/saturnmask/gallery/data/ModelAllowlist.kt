@@ -120,6 +120,12 @@ data class AllowedModel(
       acceleratorsStr = acceleratorsStr?.replace(Regex("\\bnpu\\b"), "tpu")
     }
 
+    // Do NOT add "npu"/"tpu" to the Gemma-4 allowlist entries. Google's own LiteRT-LM NPU support
+    // table (developers.google.com/edge/litert/next/litert_lm_npu) currently lists Gemma3-1B for
+    // Google Tensor, not Gemma4-2B/4B — there is no official NPU path for Gemma-4 on Pixel today,
+    // independent of any device/driver bug. Gemma-4's allowlist entries deliberately stay
+    // "gpu,cpu" only; don't "fix" this based on marketing claims without re-checking that table.
+
     if (isLlmModel) {
       val defaultTopK: Int = defaultConfig.topK ?: DEFAULT_TOPK
       val defaultTopP: Float = defaultConfig.topP ?: DEFAULT_TOPP
