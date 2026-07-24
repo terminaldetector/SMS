@@ -22,6 +22,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__ANDROID__)
@@ -423,8 +424,93 @@ namespace rnllama_jsi {
             }
         }
     }
+    // Endpoints this process is already serving as an lm_ggml_backend_rpc_start_server() worker.
+    // The server loop never returns (it accepts connections until the process dies), so this
+    // only guards against spawning a second thread for an endpoint we're already listening on.
+    static std::set<std::string>& startedRpcServers() {
+        static std::set<std::string> endpoints;
+        return endpoints;
+    }
+
+    // Resolves which local (non-RPC) devices this server should expose. An explicit name list is
+    // matched via lm_ggml_backend_dev_by_name(); otherwise every registered device that isn't
+    // itself a remote "RPC" device is offered (mirrors the default in llama.cpp's rpc-server CLI).
+    static std::vector<lm_ggml_backend_dev_t> resolveRpcServerDevices(const std::vector<std::string>& deviceNames) {
+        std::vector<lm_ggml_backend_dev_t> devices;
+        if (!deviceNames.empty()) {
+            for (const auto& name : deviceNames) {
+                lm_ggml_backend_dev_t dev = lm_ggml_backend_dev_by_name(name.c_str());
+                if (dev != nullptr) {
+                    devices.push_back(dev);
+                } else {
+                    logError("llamaStartRpcServer: unknown device '%s'", name.c_str());
+                }
+            }
+            return devices;
+        }
+
+        const size_t devCount = lm_ggml_backend_dev_count();
+        for (size_t i = 0; i < devCount; ++i) {
+            lm_ggml_backend_dev_t dev = lm_ggml_backend_dev_get(i);
+            lm_ggml_backend_reg_t reg = lm_ggml_backend_dev_backend_reg(dev);
+            const char* regName = reg ? lm_ggml_backend_reg_name(reg) : nullptr;
+            if (regName != nullptr && strcmp(regName, "RPC") == 0) {
+                // Don't re-export a remote device we're only borrowing over our own RPC server.
+                continue;
+            }
+            devices.push_back(dev);
+        }
+        return devices;
+    }
+
+    // Starts an lm_ggml_backend_rpc_start_server() worker on a detached background thread so this
+    // device can serve layers to another device's RPC client. There is no stop API upstream (the
+    // accept() loop runs until the process exits), so this is a one-way "start and forget" call,
+    // same as running the standalone `rpc-server` binary would be.
+    static bool startRpcServerBackground(
+        const std::string& endpoint,
+        const std::string& cacheDir,
+        int nThreads,
+        const std::vector<std::string>& deviceNames
+    ) {
+        static std::mutex startMutex;
+        std::lock_guard<std::mutex> lock(startMutex);
+
+        auto& started = startedRpcServers();
+        if (started.count(endpoint)) {
+            logInfo("llamaStartRpcServer: already serving %s", endpoint.c_str());
+            return true;
+        }
+
+        std::vector<lm_ggml_backend_dev_t> devices = resolveRpcServerDevices(deviceNames);
+        if (devices.empty()) {
+            logError("llamaStartRpcServer: no devices available to serve on %s", endpoint.c_str());
+            return false;
+        }
+
+        size_t threads = nThreads > 0 ? (size_t) nThreads : 4;
+        std::thread([endpoint, cacheDir, threads, devices]() mutable {
+            const char* cacheDirPtr = cacheDir.empty() ? nullptr : cacheDir.c_str();
+            lm_ggml_backend_rpc_start_server(endpoint.c_str(), cacheDirPtr, threads, devices.size(), devices.data());
+            // Only reached if the server loop exits (bind/accept failure) — free the slot so a
+            // retry on the same endpoint isn't silently swallowed by the dedupe check above.
+            std::lock_guard<std::mutex> lock2(startMutex);
+            startedRpcServers().erase(endpoint);
+        }).detach();
+
+        started.insert(endpoint);
+        return true;
+    }
 #else
     static void registerRpcServers(const std::vector<std::string>&) {}
+    static bool startRpcServerBackground(
+        const std::string&,
+        const std::string&,
+        int,
+        const std::vector<std::string>&
+    ) {
+        return false;
+    }
 #endif
 
     static void configureBackendDevices(
@@ -738,6 +824,53 @@ namespace rnllama_jsi {
             }
         );
         runtime.global().setProperty(runtime, "llamaGetBackendDevicesInfo", getBackendDevicesInfo);
+
+        // Step F: run this device as an RPC worker for another device's inference. See
+        // RPC_FORK_NOTES.md — there is no stop API upstream, this is "start and forget" for the
+        // lifetime of the process, exactly like running the standalone `rpc-server` binary.
+        auto startRpcServer = jsi::Function::createFromHostFunction(runtime,
+            jsi::PropNameID::forAscii(runtime, "llamaStartRpcServer"),
+            2,
+            [callInvoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+                if (count < 1 || !arguments[0].isString()) {
+                    throw jsi::JSError(runtime, "llamaStartRpcServer: endpoint (string, e.g. \"0.0.0.0:50052\") is required");
+                }
+                std::string endpoint = arguments[0].asString(runtime).utf8(runtime);
+
+                std::string cacheDir;
+                int nThreads = 4;
+                std::vector<std::string> deviceNames;
+                if (count > 1 && arguments[1].isObject()) {
+                    jsi::Object opts = arguments[1].asObject(runtime);
+                    if (opts.hasProperty(runtime, "cacheDir") && opts.getProperty(runtime, "cacheDir").isString()) {
+                        cacheDir = opts.getProperty(runtime, "cacheDir").asString(runtime).utf8(runtime);
+                    }
+                    if (opts.hasProperty(runtime, "nThreads") && opts.getProperty(runtime, "nThreads").isNumber()) {
+                        nThreads = (int) opts.getProperty(runtime, "nThreads").asNumber();
+                    }
+                    if (opts.hasProperty(runtime, "devices") && opts.getProperty(runtime, "devices").isObject()) {
+                        jsi::Array devicesArr = opts.getProperty(runtime, "devices").asObject(runtime).asArray(runtime);
+                        for (size_t i = 0; i < devicesArr.size(runtime); ++i) {
+                            auto val = devicesArr.getValueAtIndex(runtime, i);
+                            if (val.isString()) {
+                                deviceNames.push_back(val.asString(runtime).utf8(runtime));
+                            }
+                        }
+                    }
+                }
+
+                return createPromiseTask(runtime, callInvoker, [endpoint, cacheDir, nThreads, deviceNames]() -> PromiseResultGenerator {
+                    ensureBackendInitialized();
+
+                    bool started = startRpcServerBackground(endpoint, cacheDir, nThreads, deviceNames);
+
+                    return [started](jsi::Runtime& rt) {
+                        return jsi::Value(started);
+                    };
+                }, -1, false);
+            }
+        );
+        runtime.global().setProperty(runtime, "llamaStartRpcServer", startRpcServer);
 
         auto loadSession = jsi::Function::createFromHostFunction(runtime,
             jsi::PropNameID::forAscii(runtime, "llamaLoadSession"),

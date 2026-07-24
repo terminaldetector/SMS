@@ -87,6 +87,7 @@ const jsiBindingKeys = [
   'llamaReleaseAllContexts',
   'llamaModelInfo',
   'llamaGetBackendDevicesInfo',
+  'llamaStartRpcServer',
   'llamaLoadSession',
   'llamaSaveSession',
   'llamaTokenize',
@@ -1190,6 +1191,28 @@ export async function getBackendDevicesInfo(): Promise<
     )
     return []
   }
+}
+
+/**
+ * Starts this device as a `ggml-rpc` worker, serving its local backend devices to whoever
+ * connects to `endpoint` (e.g. another device's `initLlama({ rpc_servers: [endpoint] })`).
+ *
+ * There is no stop API: like running the standalone `rpc-server` binary, the server runs for the
+ * lifetime of the process once started. Requires the native module to have been built with
+ * `LM_GGML_USE_RPC` (Android only for now) — resolves to `false` otherwise.
+ *
+ * @param endpoint Address to listen on, e.g. `"0.0.0.0:50052"`.
+ * @param options.cacheDir Optional local directory used to cache received tensors.
+ * @param options.nThreads Threads the CPU backend on this worker should use (default 4).
+ * @param options.devices Backend device names to expose (default: all local, non-RPC devices).
+ */
+export async function startRpcServer(
+  endpoint: string,
+  options?: { cacheDir?: string; nThreads?: number; devices?: string[] },
+): Promise<boolean> {
+  await installJsi()
+  const { llamaStartRpcServer } = getJsi()
+  return llamaStartRpcServer(endpoint, options)
 }
 
 export async function initLlama(

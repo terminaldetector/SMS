@@ -9,7 +9,7 @@ symbol renamed to `lm_ggml_`/`LM_GGML_` to avoid clashing with other copies of g
 (see `scripts/bootstrap.sh`'s rename step). The RPC backend itself was never vendored, so
 `ggml-backend-reg.cpp`'s `#ifdef LM_GGML_USE_RPC` block always compiled out.
 
-## What's done (steps A-E)
+## What's done (steps A-F)
 
 - **A — vendor + rename**: `cpp/ggml-rpc.cpp`, `cpp/ggml-rpc.h`, `cpp/transport.cpp`,
   `cpp/transport.h` pulled from upstream llama.cpp at commit `6d57c26` (matching this fork's pinned
@@ -36,17 +36,31 @@ symbol renamed to `lm_ggml_`/`LM_GGML_` to avoid clashing with other copies of g
   further changes.
 - **E — TS types**: `src/types.ts` — added `rpc_servers?: Array<string>` to `NativeContextParams`,
   next to the existing `devices`/`no_gpu_devices` fields.
+- **F — worker side (`startRpcServer`)**: new JSI global `llamaStartRpcServer(endpoint, options?)`
+  in `cpp/jsi/RNLlamaJSI.cpp`, exposed as `startRpcServer()` in `src/index.ts`. It resolves which
+  local backend devices to expose (`options.devices` by name, or every device that isn't itself a
+  remote `"RPC"` device), then runs `lm_ggml_backend_rpc_start_server()` on a **detached background
+  thread** so it doesn't block the JS thread — that call is upstream's `while (true) { accept(); … }`
+  server loop and never returns on its own. There is **no stop API**: like running the standalone
+  `rpc-server` binary, once started it serves for the lifetime of the process. Repeated calls for
+  the same endpoint are deduped (tracked in a static set, cleared if the server loop ever exits on
+  its own, e.g. a bind failure) so retrying after a real failure isn't silently swallowed. Also
+  added the mock (`jest/mock.js`), the `jsi.ts` global type, and the `jsiBindingKeys` entry so
+  `installJsi()`'s strict "all bindings present" check doesn't trip on iOS, where
+  `LM_GGML_USE_RPC` isn't defined — the function is always registered, it just resolves to `false`
+  there when it can't create a server.
 
-## What's left (step F, deferred)
+## What's left (deferred)
 
-- A JSI method to **start** an RPC server on-device (`ggml_backend_rpc_start_server`) so a phone
-  can act as a worker for another device's inference — this is new host-function surface, not a
-  small mechanical patch, and deserves its own pass.
 - Wiring this fork into ChatterUI / the HELIX mesh integration described in the `archi` bundle
   (`ROADMAP_mobile_ai_mesh.md` Level 3 / Option A) — that's an app-level `package.json` dependency
   swap plus a full Expo/RN build, out of scope for validating the native module in isolation.
-- iOS: the JSI change is platform-agnostic, but `LM_GGML_USE_RPC` is only wired into the Android
-  CMake files above; `ios/` was not touched.
+- iOS: the JSI changes (`rpc_servers` param, `startRpcServer()`) are platform-agnostic and will
+  compile there, but `LM_GGML_USE_RPC` is only wired into the Android CMake files above, so on iOS
+  they're currently inert (no RPC devices ever appear, `startRpcServer()` always resolves `false`).
+- No `tensor_split` / `split_mode` control exposed to JS — once RPC devices are registered,
+  `llama.cpp`'s own device-selection heuristic (by reported free memory) decides how layers split
+  across them; the app can't yet tune that split explicitly.
 
 ## How this gets verified
 

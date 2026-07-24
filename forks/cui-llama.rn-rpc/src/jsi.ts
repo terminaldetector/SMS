@@ -22,6 +22,14 @@ declare global {
   var llamaReleaseAllContexts: () => Promise<void>
   var llamaModelInfo: (path: string, skip: string[]) => Promise<object>
   var llamaGetBackendDevicesInfo: () => Promise<string>
+  var llamaStartRpcServer: (
+    endpoint: string,
+    options?: {
+      cacheDir?: string
+      nThreads?: number
+      devices?: string[]
+    },
+  ) => Promise<boolean>
   var llamaLoadSession: (
     contextId: number,
     path: string,

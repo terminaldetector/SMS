@@ -171,6 +171,10 @@ if (!NativeModules.RNLlama) {
       jest.fn(async () => '[]'),
     )
     setGlobal(
+      'llamaStartRpcServer',
+      jest.fn(async () => false),
+    )
+    setGlobal(
       'llamaLoadSession',
       jest.fn(async () => ({ tokens_loaded: 0, prompt: '' })),
     )
