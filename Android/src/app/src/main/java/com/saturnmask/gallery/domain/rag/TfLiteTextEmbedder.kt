@@ -20,7 +20,6 @@ import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer
 import android.content.Context
 import android.util.Log
 import com.google.android.gms.tasks.Tasks
-import com.google.android.gms.tflite.gpu.GpuDelegateFactory
 import com.google.android.gms.tflite.gpu.support.TfLiteGpu
 import com.google.android.gms.tflite.java.TfLite
 import com.saturnmask.gallery.data.Accelerator
@@ -36,6 +35,11 @@ import kotlin.concurrent.withLock
 import kotlin.math.sqrt
 import org.tensorflow.lite.InterpreterApi
 import org.tensorflow.lite.InterpreterApi.Options.TfLiteRuntime
+// GpuDelegateFactory dispatches to org.tensorflow.lite.gpu (bundled with the standalone runtime)
+// or com.google.android.gms.tflite.gpu (Play Services) depending on which TfLiteRuntime the
+// InterpreterApi.Options were built with — PREFER_SYSTEM_OVER_APPLICATION here means it resolves
+// to the Play Services GPU delegate at runtime despite the org.tensorflow.lite import path.
+import org.tensorflow.lite.gpu.GpuDelegateFactory
 
 private const val TAG = "AGTfLiteTextEmbedder"
 
