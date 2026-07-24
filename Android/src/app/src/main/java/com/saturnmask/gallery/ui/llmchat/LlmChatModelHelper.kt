@@ -21,6 +21,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import com.saturnmask.gallery.common.cleanUpMediapipeTaskErrorMessage
 import com.saturnmask.gallery.data.Accelerator
+import com.saturnmask.gallery.data.backendHealthStoreFrom
 import com.saturnmask.gallery.data.ConfigKeys
 import com.saturnmask.gallery.data.DEFAULT_MAX_TOKEN
 import com.saturnmask.gallery.data.DEFAULT_TEMPERATURE
@@ -124,9 +125,21 @@ object LlmChatModelHelper : LlmModelHelper {
     // unconditional last resort (LiteRT-LM's CPU backend runs any model file, just slower). The
     // user's requested backend is always tried first — never silently overridden.
     val backendPriority = listOf(Accelerator.NPU, Accelerator.TPU, Accelerator.GPU, Accelerator.CPU)
+    val healthStore = backendHealthStoreFrom(context)
+    // Skip any backend this device already knows is broken for this model — either it failed
+    // outright last time (isKnownBad), or the process died mid-attempt last time without ever
+    // reaching markAttemptSucceeded (hadUnclearedAttempt — the one signal that can survive a true
+    // native crash, which no Kotlin try/catch here could ever detect on the run where it happens).
+    // CPU is exempt: it has no compiled/native delegate to fail this way, so it always stays
+    // available as the unconditional last resort.
+    fun isHealthy(acc: Accelerator) =
+      acc == Accelerator.CPU ||
+        (!healthStore.isKnownBad(model.name, acc.label) &&
+          !healthStore.hadUnclearedAttempt(model.name, acc.label))
     val fallbackOrder =
       (listOf(requestedAccelerator) + backendPriority.filter { it in model.accelerators })
         .distinct()
+        .filter { isHealthy(it) }
         .let { if (Accelerator.CPU in it) it else it + Accelerator.CPU }
     var backendIndex = 0
     var preferredBackend = backendFor(fallbackOrder[backendIndex])
@@ -185,9 +198,11 @@ object LlmChatModelHelper : LlmModelHelper {
       // fallbacks, so this can't loop forever on an unrelated failure.
       lateinit var engine: Engine
       while (true) {
+        healthStore.markAttemptStarted(model.name, fallbackOrder[backendIndex].label)
         try {
           engine = Engine(buildEngineConfig())
           engine.initialize()
+          healthStore.markAttemptSucceeded(model.name, fallbackOrder[backendIndex].label)
           break
         } catch (e: Exception) {
           val message = e.message ?: ""
@@ -203,6 +218,7 @@ object LlmChatModelHelper : LlmModelHelper {
               "Backend ${fallbackOrder[backendIndex]} failed to initialize for model " +
                 "'${model.name}' (${e.message}); falling back to ${fallbackOrder[backendIndex + 1]}.",
             )
+            healthStore.markBad(model.name, fallbackOrder[backendIndex].label)
             backendIndex++
             preferredBackend = backendFor(fallbackOrder[backendIndex])
           } else {

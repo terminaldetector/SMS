@@ -228,6 +228,15 @@ fun ModelImportDialog(
         ) {
           // Default configs for users to set.
           ConfigEditorsPanel(configs = IMPORT_CONFIGS_LLM, values = values)
+
+          // Whether a file actually runs on GPU/NPU depends on its architecture, which can't be
+          // validated from a filename alone — this only sets expectations, it can't restrict the
+          // picker to what's actually safe.
+          Text(
+            stringResource(R.string.import_model_accelerator_warning),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
 
         // Button row.

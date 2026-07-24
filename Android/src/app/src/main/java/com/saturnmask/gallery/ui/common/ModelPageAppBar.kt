@@ -59,6 +59,7 @@ import com.saturnmask.gallery.data.ModelCapability
 import com.saturnmask.gallery.data.ModelDownloadStatusType
 import com.saturnmask.gallery.data.RuntimeType
 import com.saturnmask.gallery.data.Task
+import com.saturnmask.gallery.data.backendHealthStoreFrom
 import com.saturnmask.gallery.data.convertValueToTargetType
 import com.saturnmask.gallery.ui.common.chat.ChatMessage
 import com.saturnmask.gallery.ui.common.chat.toLiteRtMessages
@@ -262,6 +263,12 @@ fun ModelPageAppBar(
         val oldConfigValues = model.configValues
         model.prevConfigValues = oldConfigValues
         model.configValues = curConfigValues
+        // An explicit re-selection here is the one deliberate way a previously-bad backend gets
+        // another chance — see BackendHealthStore's doc comment. Only clears the mark for the
+        // newly-picked accelerator, not the whole model.
+        (curConfigValues[ConfigKeys.ACCELERATOR.label] as? String)?.let { newAccelerator ->
+          backendHealthStoreFrom(context).clearBad(model.name, newAccelerator)
+        }
         if (task.id == BuiltInTaskId.LLM_AGENT_CHAT) {
           model.agentSkillTopKAdjusted = true
           model.agentSkillTopK = curConfigValues[ConfigKeys.TOPK.label]

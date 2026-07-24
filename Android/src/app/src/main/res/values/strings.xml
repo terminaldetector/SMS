@@ -521,6 +521,8 @@
   <string name="import_model" translatable="true">Import Model</string>
   <!-- Button label to confirm importing a model. [CHAR_LIMIT=NONE] -->
   <string name="import_action" translatable="true">Import</string>
+  <!-- Caption near the accelerator picker in the model import dialog, warning that GPU/NPU support varies by model architecture. [CHAR_LIMIT=NONE] -->
+  <string name="import_model_accelerator_warning" translatable="true">GPU/NPU compatibility depends on the model\'s architecture and may be unstable for non-Gemma models. If you see crashes or slow responses, try CPU instead.</string>
   <!-- Error message prefix when model import fails. [CHAR_LIMIT=NONE] -->
   <string name="failed_to_import" translatable="true">Failed to import</string>
   <!-- Error message when model import fails due to connection issue. [CHAR_LIMIT=NONE] -->

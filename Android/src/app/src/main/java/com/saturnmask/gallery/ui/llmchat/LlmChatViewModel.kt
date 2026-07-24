@@ -22,6 +22,8 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.lifecycle.viewModelScope
 import com.saturnmask.gallery.common.SystemPromptHelper
+import com.saturnmask.gallery.data.Accelerator
+import com.saturnmask.gallery.data.backendHealthStoreFrom
 import com.saturnmask.gallery.data.ConfigKeys
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.SystemPromptRepository
@@ -44,20 +46,32 @@ import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.ToolProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val TAG = "AGLlmChatViewModel"
+
+// How often the inactivity watchdog polls, and how long total silence must persist before a
+// generation is treated as hung and aborted.
+private const val INFERENCE_WATCHDOG_CHECK_INTERVAL_MS = 5_000L
+private const val INFERENCE_INACTIVITY_TIMEOUT_MS = 90_000L
 
 @OptIn(ExperimentalApi::class)
 open class LlmChatViewModelBase(
   private val systemPromptRepository: SystemPromptRepository? = null,
   userDataDataStore: DataStore<UserData>? = null,
   private val modelFeedbackRepository: Any? = null,
+  // Nullable so this base class's other constructors (if any are ever added without Hilt) don't
+  // break — used only to record a backend failure in BackendHealthStore, never for anything
+  // load-bearing, so a null context here just skips that recording rather than crashing.
+  private val context: Context? = null,
 ) : ChatViewModel(userDataDataStore) {
   private val _uiSystemPrompt = MutableStateFlow("")
   val uiSystemPrompt = _uiSystemPrompt.asStateFlow()
@@ -151,10 +165,25 @@ open class LlmChatViewModelBase(
 
       var firstRun = true
       val start = System.currentTimeMillis()
+      // Computed here (not down where extraContext is built) so resultListener below — defined
+      // first, lexically — can actually reference it. This is also the fix for a real bug: the
+      // thinking bubble used to render for ANY model whose response happened to carry thought-
+      // channel content, entirely independent of this flag — enableThinking only ever controlled
+      // the outbound hint sent to the engine, never whether the UI displayed what came back.
+      val enableThinking =
+        allowThinking &&
+          model.getBooleanConfigValue(key = ConfigKeys.ENABLE_THINKING, defaultValue = false)
+      // Bumped on every chunk inside resultListener below, so the inactivity watchdog defined
+      // further down (which reads this) never false-positives on a long-but-working generation.
+      var lastActivityMs = System.currentTimeMillis()
+      // Declared before resultListener (which cancels it once done/erroring) but assigned after —
+      // see the watchdogJob assignment further below.
+      var watchdogJob: Job? = null
 
       try {
         val resultListener: (String, Boolean, String?) -> Unit =
           { partialResult, done, partialThinkingResult ->
+            lastActivityMs = System.currentTimeMillis()
             if (partialResult.startsWith("<ctrl")) {
               // Do nothing. Ignore control tokens.
             } else {
@@ -167,7 +196,7 @@ open class LlmChatViewModelBase(
               }
 
               val thinkingText = partialThinkingResult
-              val isThinking = thinkingText != null && thinkingText.isNotEmpty()
+              val isThinking = enableThinking && thinkingText != null && thinkingText.isNotEmpty()
               var currentLastMessage = getLastMessage(model = model)
 
               // If thinking is enabled, add a thinking message.
@@ -246,6 +275,7 @@ open class LlmChatViewModelBase(
               }
 
               if (done) {
+                watchdogJob?.cancel()
                 val finalLastMessage = getLastMessage(model = model)
                 if (finalLastMessage?.type == ChatMessageType.THINKING) {
                   val thinkingMsg = finalLastMessage as ChatMessageThinking
@@ -271,20 +301,68 @@ open class LlmChatViewModelBase(
           }
 
         val cleanUpListener: () -> Unit = {
+          watchdogJob?.cancel()
           setInProgress(false)
           setPreparing(false)
+        }
+
+        // Round 15's init-time fallback never covers invoke-time failures (a backend that
+        // initializes fine but then fails or hangs mid-generation) — record it here so the next
+        // time this model loads, LlmChatModelHelper's fallbackOrder skips the backend that just
+        // failed instead of repeating the same failure. Deliberately not hot-swapping
+        // mid-conversation — that would need a reinit trigger plumbed up through
+        // AgentChatScreen/ModelPageAppBar; the safer, simpler fix takes effect the next time this
+        // chat/model is (re)opened. Shared by both a real onError and the inactivity watchdog
+        // below, since a hang is just a different flavor of the same "this backend is broken"
+        // signal.
+        fun recordBackendFailure(reason: String) {
+          val failedAccelerator = model.lastActiveAccelerator
+          if (context != null && failedAccelerator != null && failedAccelerator != Accelerator.CPU.label) {
+            backendHealthStoreFrom(context).markBad(model.name, failedAccelerator)
+            addMessage(
+              model = model,
+              message =
+                ChatMessageWarning(
+                  content =
+                    "$failedAccelerator $reason — it will automatically use a safer backend next " +
+                      "time this chat is opened.",
+                ),
+            )
+          }
         }
 
         val errorListener: (String) -> Unit = { message ->
           Log.e(TAG, "Error occurred while running inference")
+          watchdogJob?.cancel()
           setInProgress(false)
           setPreparing(false)
+          recordBackendFailure("had a problem running this model")
           onError(message)
         }
 
-        val enableThinking =
-          allowThinking &&
-            model.getBooleanConfigValue(key = ConfigKeys.ENABLE_THINKING, defaultValue = false)
+        // Inactivity watchdog: nothing anywhere times out a hung backend otherwise, so a stuck
+        // GPU/NPU delegate would block forever with no recovery. lastActivityMs is bumped on every
+        // chunk inside resultListener above, so a long-but-genuinely-working generation never
+        // false-positives — only real silence does.
+        watchdogJob =
+          viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+              delay(INFERENCE_WATCHDOG_CHECK_INTERVAL_MS)
+              if (System.currentTimeMillis() - lastActivityMs > INFERENCE_INACTIVITY_TIMEOUT_MS) {
+                Log.e(
+                  TAG,
+                  "No inference activity for ${INFERENCE_INACTIVITY_TIMEOUT_MS}ms — treating " +
+                    "'${model.lastActiveAccelerator}' as hung.",
+                )
+                model.runtimeHelper.stopResponse(model)
+                setInProgress(false)
+                setPreparing(false)
+                recordBackendFailure("appears unresponsive")
+                break
+              }
+            }
+          }
+
         val extraContext = if (enableThinking) mapOf("enable_thinking" to "true") else null
 
         model.runtimeHelper.runInference(
@@ -438,4 +516,5 @@ class LlmChatViewModel
 constructor(
   systemPromptRepository: SystemPromptRepository,
   userDataDataStore: DataStore<UserData>,
-) : LlmChatViewModelBase(systemPromptRepository, userDataDataStore, null)
+  @ApplicationContext context: Context,
+) : LlmChatViewModelBase(systemPromptRepository, userDataDataStore, null, context)
