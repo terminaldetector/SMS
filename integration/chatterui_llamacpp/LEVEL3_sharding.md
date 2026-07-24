@@ -42,32 +42,35 @@ directly). The one protocol addition was an optional `rpc` (`host:port`) field i
 coordinator can build the `--rpc` list; it is omitted when empty, so the wire/conformance vectors
 are unchanged.
 
-### Native work in cui-llama.rn (the remaining, off-device part)
+### Native work in cui-llama.rn — DONE, fork lives at `forks/cui-llama.rn-rpc`
 
-> **Confirmed:** `cui-llama.rn` (Vali-98) exposes **no RPC** — `ContextParams` / `NativeContextParams`
-> / `initLlama` have no `rpc_servers` and the build has no `GGML_RPC`. So Level 3 needs a **native
-> fork** of the module. Levels 1–2 need none of this. The TS seam that consumes the fork is
-> `app_mod/lib/helixRpc.ts` (`NativeHelixRpc` + `RpcInitLlama`); the control plane it calls
-> (`HelixClient.rpcPlan`) is done and proven (`js/rpc_smoke.mjs`, 7/7).
+> **Status:** the native fork exists (`forks/cui-llama.rn-rpc`, based on `cui-llama.rn@1.11.14` /
+> llama.cpp `b9309`/commit `6d57c26`) and its RPC backend **compiles and links, verified green in
+> CI** (`.github/workflows/build_cuillama_rpc_fork.yaml` builds the fork's own `example` app from
+> source with `-DLM_GGML_USE_RPC` and uploads the linked `.so`s + an APK as proof). Full status and
+> the exact vendoring/rename details: `forks/cui-llama.rn-rpc/RPC_FORK_NOTES.md`.
+>
+> `ChatterUI/package.json` now points `cui-llama.rn` at `file:../forks/cui-llama.rn-rpc`, and
+> `.github/workflows/chatterui-apk.yml` builds ChatterUI itself with
+> `-PrnllamaBuildFromSource=true` so the RPC backend is actually compiled into the app (not the
+> fork's prebuilt, non-RPC `.so`s). **Not yet built/run as an actual ChatterUI APK** — that CI run
+> hasn't happened yet; the fork's own `example` app is the only on-device-proven path so far.
 
-1. **Build with RPC:** compile the bundled llama.cpp with `-DGGML_RPC=ON` for the Android ABIs
-   (the Gradle/CMake for the module's `android/` — cui-llama.rn already builds ggml from source
-   there, so this is a build flag + linking the rpc backend).
-2. **Worker method (`startRpcServer(port)`):** wrap ggml's `rpc-server` (or `ggml_backend_rpc_start_server`)
-   as a TurboModule method binding `0.0.0.0:port`. Each phone calls it and announces its `host:port`
-   (becomes the `rpc` field in HELIX `ANNOUNCE` — already supported, `helix/control.py`).
-3. **Main/driver — `rpc_servers` + `tensor_split` params:** add `rpc_servers?: string[]` and
-   `tensor_split?: number[]` to `ContextParams` **and** `NativeContextParams` (`src/`), thread them
-   through the bridge (`android/src/main/java/com/rnllama/*` + `cpp/rnllama.cpp`) into llama.cpp's
-   `common_params.rpc_servers` / `tensor_split`. The driver phone then loads the model distributed
-   (`helixRpc.ts` `startShardMain` passes `plan.rpc_arg.split(',')` + `plan.tensor_split`).
-4. **Wire-up (TS, ready):** `app_mod/lib/helixRpc.ts` — workers call `startShardWorker(native)`,
-   the driver calls `startShardMain(client, initLlama, model)` which fetches `rpcPlan()` and inits
-   the model with the RPC topology. See also `LlamaRpcCluster` in `helix.ts`.
+- **`rpc_servers` + `startRpcServer`:** done — `initLlama({ rpc_servers: string[] })` registers
+  remote RPC devices; `startRpcServer(endpoint, options?)` runs a worker (no stop API — it serves
+  for the process's lifetime, same as the standalone `rpc-server` binary).
+- **`tensor_split`:** done — reads a `number[]` into `common_params.tensor_split[128]`, in the same
+  `[local device, rpc_servers[0], rpc_servers[1], ...]` order HELIX's `rpc_cluster.py` plans use.
+- **Wire-up (TS, matches the real fork API):** `ChatterUI/lib/helixRpc.ts` (and the
+  `app_mod/lib/helixRpc.ts` reference copy) — workers call `startShardWorker(native, port)`, the
+  driver calls `startShardMain(client, initLlama, model)` which fetches `rpcPlan()` and inits the
+  model with the RPC topology (`plan.rpc_arg.split(',')` for `rpc_servers`, `plan.tensor_split`).
+  See also `LlamaRpcCluster` in `helix.ts`.
 
-**→ Exact fork recipe:** `FORK_cui-llama-rpc.md` — a file-by-file patch guide grounded in the real
-`cui-llama.rn@1.11.14` / llama.cpp b9309 source (vendor `ggml-rpc`, add `rpc_servers` to
-`common_params`, `-DLM_GGML_USE_RPC`, JSI param read, TS types, `startRpcServer`, build-from-source).
+**→ How it was built:** `FORK_cui-llama-rpc.md` — the file-by-file recipe this fork followed (vendor
+`ggml-rpc`, add `rpc_servers`/`tensor_split` to `common_params`, `-DLM_GGML_USE_RPC`, JSI param
+reads, TS types, `startRpcServer`, build-from-source). Kept for reference / re-deriving on a version
+bump; the recipe has already been executed once in `forks/cui-llama.rn-rpc`.
 
 ### Sharding you can run today (llama.cpp binaries — no app fork)
 

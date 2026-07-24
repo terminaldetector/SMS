@@ -105,7 +105,7 @@ const getPaths = (remote: boolean): ButtonData[] => [
     {
         name: 'HELIX Mesh',
         path: '/screens/HelixMeshScreen',
-        icon: 'sharealt',
+        icon: 'share-alt',
     },
     {
         name: 'Logs',

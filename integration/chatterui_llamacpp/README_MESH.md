@@ -25,7 +25,7 @@ or a fused SuperAgent). Pure `fetch`, **no new native module**.
    [`app_mod/apply.md`](app_mod/apply.md):
    - `app_mod/lib/helixClient.ts` → `lib/helixClient.ts`
    - `app_mod/screens/HelixMeshScreen/index.tsx` → `app/screens/HelixMeshScreen/index.tsx`
-   - add `{ name: 'HELIX Mesh', path: '/screens/HelixMeshScreen', icon: 'sharealt' }` to
+   - add `{ name: 'HELIX Mesh', path: '/screens/HelixMeshScreen', icon: 'share-alt' }` to
      `getPaths(...)` in `app/components/views/SettingsDrawer/RouteList.tsx`.
 3. **Build the APK** (from the ChatterUI root):
    ```bash

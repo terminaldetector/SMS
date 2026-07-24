@@ -44,6 +44,7 @@
     "download:native-artifacts": "node ./install/download-native-artifacts.js",
     "build": "bob build",
     "prepack": "bob build",
+    "prepare": "bob build",
     "release": "release-it",
     "example": "npm --prefix example",
     "build:ios-frameworks": "./scripts/build-ios.sh",

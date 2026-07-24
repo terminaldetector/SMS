@@ -94,8 +94,11 @@ export interface RpcClusterPlan {
   rpc_arg: string;       // "h1:p1,h2:p2"  -> llama.cpp --rpc (the workers)
   tensor_split: number[]; // -> llama.cpp --tensor-split, spans [main-local, worker0, ...]
 }
+// Real native surface, as of the forks/cui-llama.rn-rpc fork (see its RPC_FORK_NOTES.md) and
+// ChatterUI/lib/helixRpc.ts: startRpcServer(endpoint, options?) — no stop API, rpc_servers is a
+// string[] and tensor_split is read by initLlama()'s ...rest spread, not passed as separate calls.
 export interface LlamaRpcCluster {
-  startWorker(port: number): Promise<void>;                // wraps llama.cpp rpc-server (GGML_RPC build)
+  startWorker(endpoint: string): Promise<boolean>;          // wraps lm_ggml_backend_rpc_start_server
   // The main/driver phone runs its normal completion, distributed via the HELIX-planned topology:
   runMain(prompt: string, plan: RpcClusterPlan): AsyncIterable<string>; // uses plan.rpc_arg + plan.tensor_split
 }

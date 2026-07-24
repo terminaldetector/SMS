@@ -3,30 +3,36 @@
 // driver hands it to llama.cpp.
 //
 // STATUS: the control plane is done and proven (HelixClient.rpcPlan ->
-// integration/chatterui_llamacpp/js/rpc_smoke.mjs, 7/7). The tensor split needs a NATIVE fork of
-// cui-llama.rn (it currently exposes NO RPC): build llama.cpp with -DGGML_RPC=ON, add an
-// `rpc_servers` context param, and expose `startRpcServer(port)`. This module is the TS seam that
-// consumes that native surface. The exact, file-by-file fork recipe (grounded in cui-llama.rn
-// 1.11.14 / llama.cpp b9309) is in FORK_cui-llama-rpc.md. Until the fork exists, L3 does not run
-// on-device (L1 + L2 do).
+// integration/chatterui_llamacpp/js/rpc_smoke.mjs, 7/7). The native side now exists too: a real
+// fork of cui-llama.rn lives at forks/cui-llama.rn-rpc (see its RPC_FORK_NOTES.md) — it builds with
+// LM_GGML_USE_RPC (verified green in CI: .github/workflows/build_cuillama_rpc_fork.yaml compiles
+// the fork's own example app from source and links the RPC backend), exposes `rpc_servers` +
+// `tensor_split` on `initLlama()`, and a worker-side `startRpcServer(endpoint, options?)`. This
+// module is the TS seam that wires HELIX's plan to that real native surface (types below mirror
+// forks/cui-llama.rn-rpc/src/types.ts + src/index.ts exactly — keep them in sync if the fork's API
+// changes). Not yet built/run as part of a ChatterUI APK — see FORK_cui-llama-rpc.md for the
+// remaining app-level wiring (package.json dependency, expo prebuild, from-source Gradle build).
 
 import { HelixClient } from './helixClient'
 import type { RpcClusterPlan } from './helixClient'
 
-// The native surface a forked cui-llama.rn must provide (does not exist upstream yet).
+// The native surface the forked cui-llama.rn provides (forks/cui-llama.rn-rpc/src/index.ts).
 export interface NativeHelixRpc {
-    // Worker side: start a ggml rpc-server bound to 0.0.0.0:port (from GGML_RPC build).
-    startRpcServer(port: number): Promise<void>
-    stopRpcServer(): Promise<void>
+    // Worker side: binds an lm_ggml_backend_rpc_start_server() on `endpoint` ("host:port", usually
+    // "0.0.0.0:<port>"), serving this device's local backend devices to remote callers. Runs on a
+    // detached background thread; the underlying accept() loop never returns, so there is NO stop
+    // API — like running the standalone `rpc-server` binary, it serves for the process's lifetime.
+    startRpcServer(endpoint: string, options?: { cacheDir?: string; nThreads?: number; devices?: string[] }): Promise<boolean>
 }
 
-// The forked initLlama must accept rpc_servers + tensor_split (main/driver side).
+// The forked initLlama accepts rpc_servers (array, not a joined string) + tensor_split (main/driver
+// side). Matches NativeContextParams in forks/cui-llama.rn-rpc/src/types.ts.
 export interface RpcInitLlama {
     (params: {
         model: string
         n_gpu_layers?: number
-        rpc_servers?: string // llama.cpp --rpc list, "host:port,host:port" (matches plan.rpc_arg)
-        tensor_split?: number[] // llama.cpp --tensor-split ratios
+        rpc_servers?: string[] // ["host:port", ...] — the plan's workers, in ring order
+        tensor_split?: number[] // llama.cpp --tensor-split ratios, [main-local, worker0, ...]
         [k: string]: unknown
     }): Promise<unknown>
 }
@@ -37,11 +43,15 @@ export interface ShardWorkerHandle {
     stop(): Promise<void>
 }
 
-// Worker phone: advertise + run a ggml rpc-server so the main node can offload layers to us.
-// (HELIX discovery/attestation decides membership; we just serve.)
+// Worker phone: advertise + run an rpc-server so the main node can offload layers to us. (HELIX
+// discovery/attestation decides membership; we just serve.) There is no way to stop a started RPC
+// server (see NativeHelixRpc above) — `stop()` is a no-op kept for API symmetry with the main role.
 export async function startShardWorker(native: NativeHelixRpc, port = 50052): Promise<() => Promise<void>> {
-    await native.startRpcServer(port)
-    return () => native.stopRpcServer()
+    const ok = await native.startRpcServer(`0.0.0.0:${port}`)
+    if (!ok) throw new Error(`startRpcServer failed to bind 0.0.0.0:${port}`)
+    return async () => {
+        /* no stop API upstream — the server runs for the process's lifetime */
+    }
 }
 
 // Main/driver phone: get the HELIX plan and load the model distributed across the ring's workers.
@@ -52,12 +62,14 @@ export async function startShardMain(
 ): Promise<ShardWorkerHandle> {
     const plan = await client.rpcPlan(model)
     if (!plan.ok) throw new Error('rpc_plan failed (is the coordinator a ControlNode with rpc_addrs?)')
-    // llama.cpp: --rpc = the worker rpc-servers (plan.rpc_arg is already "host:port,host:port");
-    // --tensor-split spans [main-local, worker0, ...].
+    // llama.cpp: --rpc = the worker rpc-servers; --tensor-split spans [main-local, worker0, ...].
+    // plan.rpc_arg is "host:port,host:port" (matches --rpc's CLI form) — split into the array the
+    // fork's initLlama expects.
+    const rpcServers = plan.rpc_arg ? plan.rpc_arg.split(',') : []
     await initLlama({
         model: model.model_path,
         n_gpu_layers: 99,
-        rpc_servers: plan.rpc_arg,
+        rpc_servers: rpcServers,
         tensor_split: plan.tensor_split,
     })
     return {

@@ -36,6 +36,14 @@ symbol renamed to `lm_ggml_`/`LM_GGML_` to avoid clashing with other copies of g
   further changes.
 - **E — TS types**: `src/types.ts` — added `rpc_servers?: Array<string>` to `NativeContextParams`,
   next to the existing `devices`/`no_gpu_devices` fields.
+- **G — `tensor_split`** (added after the initial A-F pass, wiring this fork into HELIX):
+  `cpp/jsi/JSIParams.cpp`'s `parseCommonParams` now reads a `tensor_split: number[]` field and
+  copies it into `common_params.tensor_split[128]` (that field already existed upstream — plain
+  data, no `ggml_` symbols to rename, so no CMake/vendoring changes needed). Order matches
+  `getFilteredDefaultDevices()`'s device list: `[local device, rpc_servers[0], rpc_servers[1], ...]`
+  — exactly the `[main-local, worker0, worker1, ...]` order HELIX's `rpc_cluster.py` plans emit as
+  `tensor_split`. `src/types.ts` — added `tensor_split?: Array<number>` next to `rpc_servers`;
+  `initLlama()`'s existing `...rest` spread (`src/index.ts`) forwards it with no further changes.
 - **F — worker side (`startRpcServer`)**: new JSI global `llamaStartRpcServer(endpoint, options?)`
   in `cpp/jsi/RNLlamaJSI.cpp`, exposed as `startRpcServer()` in `src/index.ts`. It resolves which
   local backend devices to expose (`options.devices` by name, or every device that isn't itself a
@@ -52,15 +60,18 @@ symbol renamed to `lm_ggml_`/`LM_GGML_` to avoid clashing with other copies of g
 
 ## What's left (deferred)
 
-- Wiring this fork into ChatterUI / the HELIX mesh integration described in the `archi` bundle
-  (`ROADMAP_mobile_ai_mesh.md` Level 3 / Option A) — that's an app-level `package.json` dependency
-  swap plus a full Expo/RN build, out of scope for validating the native module in isolation.
-- iOS: the JSI changes (`rpc_servers` param, `startRpcServer()`) are platform-agnostic and will
-  compile there, but `LM_GGML_USE_RPC` is only wired into the Android CMake files above, so on iOS
-  they're currently inert (no RPC devices ever appear, `startRpcServer()` always resolves `false`).
-- No `tensor_split` / `split_mode` control exposed to JS — once RPC devices are registered,
-  `llama.cpp`'s own device-selection heuristic (by reported free memory) decides how layers split
-  across them; the app can't yet tune that split explicitly.
+- Wired into ChatterUI now (`ChatterUI/package.json` → `file:../forks/cui-llama.rn-rpc`,
+  `ChatterUI/lib/helixRpc.ts` updated to this fork's real API) — see the repo root
+  `LEVEL3_sharding.md` / `integration/chatterui_llamacpp/FORK_cui-llama-rpc.md` for the ChatterUI
+  side. Not yet built/tested on an actual ChatterUI APK (needs `expo prebuild` + a from-source
+  Gradle build on a machine with the NDK; the `example` app above is the only on-device-proven path
+  so far).
+- iOS: the JSI changes (`rpc_servers`/`tensor_split` params, `startRpcServer()`) are
+  platform-agnostic and will compile there, but `LM_GGML_USE_RPC` is only wired into the Android
+  CMake files above, so on iOS they're currently inert (no RPC devices ever appear,
+  `startRpcServer()` always resolves `false`).
+- `split_mode` still not exposed to JS (defaults to `LAYER`, which is what layer-band sharding
+  needs, so this is low priority).
 
 ## How this gets verified
 

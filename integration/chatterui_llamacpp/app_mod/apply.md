@@ -39,7 +39,7 @@ In `app/components/views/SettingsDrawer/RouteList.tsx`, add one item to the `get
     {
         name: 'HELIX Mesh',
         path: '/screens/HelixMeshScreen',
-        icon: 'sharealt',
+        icon: 'share-alt',
     },
 ```
 

@@ -89,6 +89,13 @@ export type NativeContextParams = {
   rpc_servers?: Array<string>
 
   /**
+   * Proportion of the model each device should hold, in device-registration order
+   * (`[local device, rpc_servers[0], rpc_servers[1], ...]`). Mirrors llama.cpp's
+   * `--tensor-split`. Only meaningful alongside `rpc_servers` / other backend devices.
+   */
+  tensor_split?: Array<number>
+
+  /**
    * Enable flash attention, only recommended in GPU device.
    */
   flash_attn_type?: string

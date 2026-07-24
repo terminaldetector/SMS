@@ -1,6 +1,11 @@
 # Build the ChatterUI + HELIX mesh-mod APK (the vendored app lives in ./ChatterUI).
-# GitHub runners have the Android SDK + full internet, and cui-llama.rn ships prebuilt native libs,
-# so this prebuilds the Expo project and assembles an installable APK (no llama.cpp compile).
+# GitHub runners have the Android SDK + full internet.
+#
+# cui-llama.rn is now forks/cui-llama.rn-rpc (ChatterUI/package.json -> file:../forks/cui-llama.rn-rpc),
+# an RPC-enabled fork (HELIX Level 3 / Option A — see forks/cui-llama.rn-rpc/RPC_FORK_NOTES.md), so
+# this compiles llama.cpp FROM SOURCE with -DLM_GGML_USE_RPC (rnllamaBuildFromSource=true) instead of
+# using prebuilt native libs — that's why this workflow is slower than a stock ChatterUI build and why
+# the fork's own JS/TS (lib/) must be built here before ChatterUI's npm install can resolve it.
 #
 # Builds assembleRelease by default: a RELEASE APK EMBEDS the JS bundle and runs standalone. A debug
 # APK does NOT bundle JS (it needs a Metro dev server) — installed on a phone it hangs on the splash.
@@ -27,7 +32,7 @@ defaults:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -45,8 +50,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # NDK 27.3.13750724 matches the version build_cuillama_rpc_fork.yaml already proved green
+      # (compiles + links the RPC backend for forks/cui-llama.rn-rpc) — keep these in sync.
       - name: Install Android platform + NDK
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724"
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -57,15 +64,33 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('ChatterUI/package-lock.json') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      # Build the fork's own JS/TS output (lib/) — it's gitignored (rebuilt on publish normally),
+      # but ChatterUI/package.json points at it directly via file:, and its package.json main/types
+      # fields point at lib/, so ChatterUI's npm install can't resolve the module without this.
+      # --ignore-scripts skips its postinstall (downloads prebuilt non-RPC .so's we don't want here).
+      - name: Build cui-llama.rn RPC fork's JS/TS output
+        working-directory: forks/cui-llama.rn-rpc
+        run: |
+          npm install --no-audit --no-fund --ignore-scripts
+          npm run build
+
       - name: Install JS dependencies
+        env:
+          RNLLAMA_SKIP_POSTINSTALL: '1'
         run: npm install   # patch-package postinstall; installs @noble/*, react-native-tcp-socket, etc.
 
       - name: Expo prebuild (generate android/)
         run: npx expo prebuild --platform android --clean
 
+      # rnllamaBuildFromSource=true compiles llama.cpp (incl. the vendored ggml-rpc backend) instead
+      # of using cui-llama.rn's prebuilt (non-RPC) jniLibs; arm64-v8a covers effectively all modern
+      # Android phones and keeps from-source compile time reasonable (matches the fork's own CI).
       - name: Gradle build
         working-directory: ChatterUI/android
-        run: ./gradlew ${{ github.event.inputs.variant || 'assembleRelease' }} --no-daemon
+        run: |
+          ./gradlew ${{ github.event.inputs.variant || 'assembleRelease' }} \
+            -PrnllamaBuildFromSource=true -PreactNativeArchitectures=arm64-v8a \
+            --no-daemon --stacktrace
 
       - name: Locate APK
         id: apk

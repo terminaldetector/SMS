@@ -1,14 +1,27 @@
 # Native fork of cui-llama.rn — enable llama.cpp RPC (HELIX Level 3, in-app sharding)
 
-Goal: make the cui-llama.rn native module able to (a) **join** a distributed run as a worker
-(`startRpcServer(port)`) and (b) **drive** one as the main node (`rpc_servers` + `tensor_split` in
-`initLlama`). HELIX supplies the topology (`HelixClient.rpcPlan()`, proven); this fork lets the app
-consume it. The TS seam is already written: `app_mod/lib/helixRpc.ts`
-(`startShardWorker` / `startShardMain` against the `NativeHelixRpc` / `RpcInitLlama` surface below).
+> **DONE.** This recipe has been executed: the fork lives at `forks/cui-llama.rn-rpc` (repo root),
+> `ChatterUI/package.json`'s `cui-llama.rn` points at `file:../forks/cui-llama.rn-rpc`, and its RPC
+> backend compiles + links **verified green in CI**
+> (`.github/workflows/build_cuillama_rpc_fork.yaml`, builds the fork's own `example` app from source
+> and uploads the linked `.so`s + APK). Full status: `forks/cui-llama.rn-rpc/RPC_FORK_NOTES.md`.
+> `.github/workflows/chatterui-apk.yml` now builds ChatterUI itself with
+> `rnllamaBuildFromSource=true` — that specific run (a real ChatterUI APK with RPC compiled in)
+> hasn't happened yet, so on-device verification with the actual app is still the next step.
+> The recipe below is kept as a reference for re-deriving the fork on a future `cui-llama.rn` version
+> bump — it does not need to be repeated for the current version.
 
-> **Not buildable/testable in the HELIX dev environment** (no Android NDK; native compile). This is
-> an engineering recipe grounded in the **actual** package source (`cui-llama.rn@1.11.14`,
-> llama.cpp **b9309**), to apply and build in your fork. Verify on-device.
+Goal: make the cui-llama.rn native module able to (a) **join** a distributed run as a worker
+(`startRpcServer(endpoint, options?)`) and (b) **drive** one as the main node (`rpc_servers` +
+`tensor_split` in `initLlama`). HELIX supplies the topology (`HelixClient.rpcPlan()`, proven); this
+fork lets the app consume it. The TS seam: `ChatterUI/lib/helixRpc.ts`
+(`startShardWorker` / `startShardMain` against the `NativeHelixRpc` / `RpcInitLlama` surface below,
+which mirrors the fork's real API — see `RPC_FORK_NOTES.md` for the exact signatures).
+
+> This was originally written as an engineering recipe grounded in the **actual** package source
+> (`cui-llama.rn@1.11.14`, llama.cpp **b9309**) for applying and building in your own fork, since the
+> cloud dev environment this repo was built in has no Android NDK. It has since been executed (see
+> above) — steps below are the historical record of what was done.
 
 ## Confirmed baseline (why each step is needed)
 - RPC is **stripped**: no `cpp/ggml-rpc.{cpp,h}`; no `rpc_servers` in `cpp/common/common.{h,cpp}`.

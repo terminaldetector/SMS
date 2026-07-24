@@ -309,6 +309,22 @@ namespace rnllama_jsi {
 #endif
 
         cparams.n_gpu_layers = getPropertyAsInt(runtime, params, "n_gpu_layers", cparams.n_gpu_layers);
+
+        // tensor_split: proportion of the model each device holds, in device-registration order
+        // ([local device, rpc_servers[0], rpc_servers[1], ...] — matches HELIX's rpc_cluster plan).
+        if (params.hasProperty(runtime, "tensor_split")) {
+            jsi::Value tsValue = params.getProperty(runtime, "tensor_split");
+            if (tsValue.isObject() && tsValue.asObject(runtime).isArray(runtime)) {
+                jsi::Array ts = tsValue.asObject(runtime).asArray(runtime);
+                size_t n = std::min<size_t>(ts.size(runtime), 128);
+                for (size_t i = 0; i < n; i++) {
+                    jsi::Value v = ts.getValueAtIndex(runtime, i);
+                    if (v.isNumber()) {
+                        cparams.tensor_split[i] = static_cast<float>(v.asNumber());
+                    }
+                }
+            }
+        }
         if (!cpuMask.empty()) {
             bool cpumask[LM_GGML_MAX_N_THREADS] = {false};
             if (parse_cpu_mask(cpuMask, cpumask)) {
