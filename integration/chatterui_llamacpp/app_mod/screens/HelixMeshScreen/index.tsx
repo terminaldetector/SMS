@@ -10,11 +10,13 @@ import * as ExpoCrypto from 'expo-crypto'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useMMKVString } from 'react-native-mmkv'
+import QRCode from 'react-native-qrcode-svg'
 
 import ThemedButton from '@components/buttons/ThemedButton'
 import HorizontalSelector from '@components/input/HorizontalSelector'
 import ThemedTextInput from '@components/input/ThemedTextInput'
 import HeaderTitle from '@components/views/HeaderTitle'
+import QrScannerSheet from '@components/views/QrScannerSheet'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
@@ -70,6 +72,7 @@ const HelixMeshScreen = () => {
     const [wsUrl, setWsUrl] = useMMKVString(WS_KEY)
     const [agentJoined, setAgentJoined] = useState(false)
     const [agentJoining, setAgentJoining] = useState(false)
+    const [showQrScanner, setShowQrScanner] = useState(false)
     const agentRef = useRef<HelixAgentNode | null>(null)
 
     // Device-to-device (no PC): this phone hosts the coordinator.
@@ -332,7 +335,14 @@ const HelixMeshScreen = () => {
                             ● hosting on port {HOST_PORT}
                             {hostIp ? ` — other phone joins ${hostIp}:${HOST_PORT}` : ''}
                         </Text>
-                        {!hostIp && (
+                        {hostIp ? (
+                            <View style={[styles.qrBox, styles.gap]}>
+                                <QRCode value={`ws://${hostIp}:${HOST_PORT}`} size={160} />
+                                <Text style={styles.dim}>
+                                    Scan with the other phone's "Join as agent" → Scan QR
+                                </Text>
+                            </View>
+                        ) : (
                             <Text style={styles.dim}>
                                 Find this phone's Wi-Fi IP in Settings → Wi-Fi; the other phone joins
                                 that IP:{HOST_PORT}.
@@ -402,20 +412,38 @@ const HelixMeshScreen = () => {
                     autoCorrect={false}
                     containerStyle={styles.gap}
                 />
-                <ThemedButton
-                    label={agentJoining ? 'Joining…' : agentJoined ? 'Leave mesh' : 'Join as agent'}
-                    variant={agentJoined ? 'critical' : 'primary'}
-                    onPress={agentJoined ? onLeaveAgent : onJoinAgent}
-                    buttonStyle={styles.gap}
-                />
+                <View style={[styles.row, styles.gap]}>
+                    <ThemedButton
+                        label={agentJoining ? 'Joining…' : agentJoined ? 'Leave mesh' : 'Join as agent'}
+                        variant={agentJoined ? 'critical' : 'primary'}
+                        onPress={agentJoined ? onLeaveAgent : onJoinAgent}
+                        buttonStyle={styles.flex}
+                    />
+                    <ThemedButton
+                        label="Scan QR"
+                        variant="secondary"
+                        onPress={() => setShowQrScanner(true)}
+                        buttonStyle={styles.flex}
+                    />
+                </View>
                 {agentJoined && (
                     <Text style={styles.node}>● online as {agentId} — answering mesh tasks</Text>
                 )}
             </View>
 
+            <QrScannerSheet
+                visible={showQrScanner}
+                setVisible={setShowQrScanner}
+                onScanned={(data) => {
+                    setWsUrl(data)
+                    Logger.infoToast('Scanned host address')
+                }}
+            />
+
             <Text style={styles.help}>
-                No PC: one phone taps "Start hosting", the other loads a model and taps "Join as
-                agent" with the host phone's IP:{HOST_PORT}. Both on the same Wi-Fi.{'\n\n'}
+                No PC: one phone taps "Start hosting", the other loads a model and either scans the
+                host's QR code or types its IP:{HOST_PORT} into "Join as agent". Both on the same
+                Wi-Fi.{'\n\n'}
                 With a PC in the same Wi-Fi: {'\n'}
                 • L1 (drive the mesh): python -m helix.host.http_control --host 0.0.0.0{'\n'}
                 • L2 (use this phone as an agent): python -m helix.host.agent_host_ws_demo --host 0.0.0.0
@@ -445,6 +473,7 @@ const useStyles = () => {
             borderColor: color.primary._300,
         },
         result: { color: color.text._100 },
+        qrBox: { alignItems: 'center', rowGap: spacing.s },
         agentBox: {
             marginTop: spacing.xl2,
             paddingTop: spacing.l,
