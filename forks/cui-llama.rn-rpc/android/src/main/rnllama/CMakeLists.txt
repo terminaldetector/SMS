@@ -93,7 +93,16 @@ endif()
 function(build_rnllama_library target_name arch cpu_flags)
     set(ENABLE_OPENCL OFF)
     if (${target_name} MATCHES ".*_opencl$")
-        set(ENABLE_OPENCL ON)
+        # third_party/OpenCL-Headers is a git submodule; when it hasn't been checked out (e.g. a
+        # source tree exported without submodule history, or scripts/build-opencl.sh never run),
+        # CL/cl.h won't exist and ggml-opencl.cpp can't even compile. Fall back to building this
+        # variant without OpenCL rather than hard-failing the whole build - the JNI CMakeLists
+        # unconditionally links against this target by name, so it still needs to exist.
+        if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/OpenCL-Headers/CL/cl.h)
+            set(ENABLE_OPENCL ON)
+        else ()
+            message(WARNING "third_party/OpenCL-Headers/CL/cl.h not found - building ${target_name} without OpenCL support (run scripts/build-opencl.sh to fetch it)")
+        endif ()
     endif ()
 
     set(ENABLE_HEXAGON OFF)
