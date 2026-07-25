@@ -23,7 +23,10 @@ on:
         default: assembleRelease
         options: [assembleRelease, assembleDebug]
   push:
-    paths: ['ChatterUI/**', '.github/workflows/chatterui-apk.yml']
+    # forks/** matters as much as ChatterUI/**: cui-llama.rn resolves to forks/cui-llama.rn-rpc, so
+    # its C++, its lib/ and its package.json are all inputs to this APK. Without it, a fix that
+    # touches only the fork silently produces no build at all.
+    paths: ['ChatterUI/**', 'forks/**', '.github/workflows/chatterui-apk.yml']
 
 defaults:
   run:
