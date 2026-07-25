@@ -225,7 +225,7 @@ const HelixMeshScreen = () => {
         }
         const store = Llama.useLlamaModelStore.getState()
         if (!store.context) {
-            Logger.errorToast('Load a model in ChatterUI first (Models), then join')
+            Logger.errorToast('Load a model in TriangleUI first (Models), then join')
             setAgentJoining(false)
             return
         }
@@ -570,7 +570,7 @@ const HelixMeshScreen = () => {
             <View style={styles.agentBox}>
                 <Text style={styles.section}>Device-to-device (no PC)</Text>
                 <Text style={styles.dim}>
-                    This phone becomes the coordinator. The other ChatterUI phone loads a model and
+                    This phone becomes the coordinator. The other TriangleUI phone loads a model and
                     uses "Join as agent" below, pointed at this phone's address. No PC needed.
                 </Text>
                 <ThemedSwitch

@@ -286,7 +286,7 @@ export namespace Model {
         try {
             const foreign = foreignFormatOf(filename)
             if (foreign) {
-                Logger.errorToast(`${foreign} is not a GGUF model — ChatterUI runs GGUF files only`)
+                Logger.errorToast(`${foreign} is not a GGUF model — TriangleUI runs GGUF files only`)
                 return false
             }
 

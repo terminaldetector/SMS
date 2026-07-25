@@ -51,7 +51,7 @@ export async function continueResponse(swipeId: number) {
 const completionTaskOptions = {
     taskName: 'chatterui_completion_task',
     taskTitle: 'Running completion...',
-    taskDesc: 'ChatterUI is running a completion task',
+    taskDesc: 'TriangleUI is running a completion task',
     taskIcon: {
         name: 'ic_launcher',
         type: 'mipmap',

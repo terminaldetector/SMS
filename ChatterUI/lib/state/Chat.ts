@@ -141,7 +141,7 @@ export const sendGenerateCompleteNotification = async () => {
 
     const notificationText = showMessage
         ? Chats.useChatState.getState().buffer?.data?.trim()
-        : 'ChatterUI has finished a response.'
+        : 'TriangleUI has finished a response.'
 
     Notifications.scheduleNotificationAsync({
         content: {

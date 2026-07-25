@@ -33,7 +33,7 @@ const AboutScreen = () => {
                 <Image source={require('../../assets/images/icon.png')} style={styles.icon} />
             </TouchableOpacity>
 
-            <Text style={styles.titleText}>ChatterUI</Text>
+            <Text style={styles.titleText}>TriangleUI</Text>
             <Text style={styles.subtitleText}>
                 Version {version} {devMode && '[DEV MODE]'}
             </Text>
@@ -53,10 +53,11 @@ const AboutScreen = () => {
             )}
 
             <Text style={styles.body}>
-                ChatterUI is a free and open-source application developed by Vali-98
+                TriangleUI adds the HELIX mesh — phones running one model together — to ChatterUI,
+                the free and open-source app developed by Vali-98.
             </Text>
             <Text style={{ marginBottom: spacing.xl3, ...styles.body }}>
-                {`This app is a passion project I develop in my free time. If you're enjoying the app, consider supporting its development!`}
+                {`ChatterUI is a passion project Vali-98 develops in their free time. If you're enjoying the app, consider supporting its development!`}
             </Text>
             <Text style={{ ...styles.body, marginBottom: spacing.m }}>
                 Donate to ChatterUI here:

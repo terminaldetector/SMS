@@ -1,8 +1,12 @@
 const IS_DEV = process.env.APP_VARIANT === 'development'
 
+// This fork is called TriangleUI. Only the display name and icon change: `slug`, `scheme` and the
+// Android/iOS package ids deliberately stay as they are, because changing a package id makes this a
+// different app to the OS — a new install that cannot see the chats, characters or models the one
+// already on the phone has.
 module.exports = {
     expo: {
-        name: IS_DEV ? 'ChatterUI (DEV)' : 'ChatterUI',
+        name: IS_DEV ? 'TriangleUI (DEV)' : 'TriangleUI',
         newArchEnabled: true,
         slug: 'ChatterUI',
         version: '0.9.0',
@@ -82,11 +86,11 @@ module.exports = {
                     'android:largeHeap': true,
                 },
             ],
-            ['@vali98/react-native-process-text', { label: 'Ask In ChatterUi' }],
+            ['@vali98/react-native-process-text', { label: 'Ask In TriangleUI' }],
             [
                 'expo-camera',
                 {
-                    cameraPermission: 'Allow ChatterUI to access your camera',
+                    cameraPermission: 'Allow TriangleUI to access your camera',
                 },
             ],
             ['expo-sqlite', { withSQLiteVecExtension: true }],

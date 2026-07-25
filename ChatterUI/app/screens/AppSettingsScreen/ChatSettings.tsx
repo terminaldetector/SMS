@@ -49,10 +49,10 @@ const ChatSettings = () => {
             />
 
             <ThemedSwitch
-                label="Ask In ChatterUI"
+                label="Ask In TriangleUI"
                 value={textIntent}
                 onChangeValue={setTextIntent}
-                description="Adds ChatterUI as a search option when highlighting text"
+                description="Adds TriangleUI as a search option when highlighting text"
             />
 
             <ThemedButton
