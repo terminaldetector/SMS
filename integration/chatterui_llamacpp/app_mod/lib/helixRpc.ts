@@ -14,7 +14,8 @@
 // remaining app-level wiring (package.json dependency, expo prebuild, from-source Gradle build).
 
 import { HelixClient } from './helixClient'
-import type { RpcClusterPlan } from './helixClient'
+import { planRpcCluster } from './helixPlacement'
+import type { Capacity, RpcClusterPlan } from './helixPlacement'
 
 // The native surface the forked cui-llama.rn provides (forks/cui-llama.rn-rpc/src/index.ts).
 export interface NativeHelixRpc {
@@ -54,22 +55,19 @@ export async function startShardWorker(native: NativeHelixRpc, port = 50052): Pr
     }
 }
 
-// Main/driver phone: get the HELIX plan and load the model distributed across the ring's workers.
-export async function startShardMain(
-    client: HelixClient,
+// Load a model distributed across a plan's ring. Shared by both planning paths below — the only
+// thing that differs between them is where the plan came from.
+async function loadDistributed(
     initLlama: RpcInitLlama,
-    model: { model_id: string; model_path: string; n_layers: number; model_bytes: number }
+    plan: RpcClusterPlan,
+    modelPath: string
 ): Promise<ShardWorkerHandle> {
-    const plan = await client.rpcPlan(model)
-    if (!plan.ok) throw new Error('rpc_plan failed (is the coordinator a ControlNode with rpc_addrs?)')
     // llama.cpp: --rpc = the worker rpc-servers; --tensor-split spans [main-local, worker0, ...].
-    // plan.rpc_arg is "host:port,host:port" (matches --rpc's CLI form) — split into the array the
-    // fork's initLlama expects.
-    const rpcServers = plan.rpc_arg ? plan.rpc_arg.split(',') : []
+    // plan.rpc_arg is "host:port,host:port" (the CLI form) — split into the array initLlama wants.
     await initLlama({
-        model: model.model_path,
+        model: modelPath,
         n_gpu_layers: 99,
-        rpc_servers: rpcServers,
+        rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
         tensor_split: plan.tensor_split,
     })
     return {
@@ -79,4 +77,56 @@ export async function startShardMain(
             /* unload handled by ChatterUI's model store */
         },
     }
+}
+
+export interface ShardNode {
+    id: string
+    mem: number
+    rpc: string
+}
+
+// Host phone, NO PC: plan the shard here from what the joined agents announced (memory + rpc
+// address). This is the path the device-to-device mesh uses — HelixClient.rpcPlan() below needs a
+// Python coordinator, which is exactly what the no-PC setup doesn't have. `host` is this phone,
+// which is always the driver (ring[0]).
+export function planLocalShard(
+    model: { model_id: string; n_layers: number; model_bytes: number },
+    host: ShardNode,
+    workers: ShardNode[]
+): RpcClusterPlan {
+    const usable = workers.filter((w) => w.rpc && w.mem > 0)
+    if (!usable.length)
+        throw new Error('no joined phone is offering to hold layers (enable sharding on it first)')
+
+    const members: Record<string, Capacity> = { [host.id]: { mem_bytes: host.mem } }
+    const addrs: Record<string, string> = { [host.id]: host.rpc }
+    for (const w of usable) {
+        members[w.id] = { mem_bytes: w.mem }
+        addrs[w.id] = w.rpc
+    }
+    // Host first: planPlacement treats ring[0] as main, and the driver has to be this phone.
+    const order = [host.id, ...usable.map((w) => w.id)]
+    return planRpcCluster(members, addrs, model.model_id, model.n_layers, model.model_bytes, order)
+}
+
+// planLocalShard + load, for callers that drive initLlama themselves (the app loads through
+// ChatterUI's model store instead, so the sharded context is the one chats use).
+export async function startShardMainLocal(
+    initLlama: RpcInitLlama,
+    model: { model_id: string; model_path: string; n_layers: number; model_bytes: number },
+    host: ShardNode,
+    workers: ShardNode[]
+): Promise<ShardWorkerHandle> {
+    return loadDistributed(initLlama, planLocalShard(model, host, workers), model.model_path)
+}
+
+// Main/driver phone: get the HELIX plan and load the model distributed across the ring's workers.
+export async function startShardMain(
+    client: HelixClient,
+    initLlama: RpcInitLlama,
+    model: { model_id: string; model_path: string; n_layers: number; model_bytes: number }
+): Promise<ShardWorkerHandle> {
+    const plan = await client.rpcPlan(model)
+    if (!plan.ok) throw new Error('rpc_plan failed (is the coordinator a ControlNode with rpc_addrs?)')
+    return loadDistributed(initLlama, plan, model.model_path)
 }

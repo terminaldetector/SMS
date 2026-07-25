@@ -19,6 +19,7 @@ import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
 import HelixQrSheet from '@components/views/HelixQrSheet'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
+import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
@@ -33,7 +34,30 @@ const LAST_HOST_IP_KEY = 'helix-mesh-last-host-ip'
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
 const HOST_PORT = 8790
+// llama.cpp's rpc-server port on each shard worker. Fixed: every phone runs one server, and the
+// address is announced, so there is nothing to configure.
+const RPC_PORT = 50052
 type HostMode = 'single' | 'voting'
+
+// Lazily required like the other native bits, so nothing here runs at app startup.
+function deviceTotalMemory(): number {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        return Number(require('expo-device').totalMemory ?? 0)
+    } catch {
+        return 0
+    }
+}
+
+// The GGUF's layer count, which the planner needs to divide the model. It isn't in the model DB
+// row, so read it back off the file — the same call the importer uses.
+async function readLayerCount(modelPath: string): Promise<number> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { loadLlamaModelInfo } = require('cui-llama.rn')
+    const info: any = await loadLlamaModelInfo(modelPath)
+    const arch = info?.['general.architecture']
+    return Number(info?.[`${arch}.block_count`] ?? 0)
+}
 
 // Best-effort LAN IP for the host phone (so the QR/address the other phone needs is right there,
 // no hunting through Settings). expo-network is an Expo module (New-Architecture-safe); required
@@ -102,6 +126,13 @@ const HelixMeshScreen = () => {
     const [hostRunning, setHostRunning] = useState(false)
     const [hostResult, setHostResult] = useState('')
     const coordRef = useRef<HelixCoordinator | null>(null)
+
+    // Level 3 sharding: one big model split across phones by llama.cpp RPC.
+    // Non-empty once this phone's rpc-server is up: its announced "host:port". Doubles as the
+    // "am I offering my RAM" flag, so the two can't disagree.
+    const [shardRpcAddr, setShardRpcAddr] = useState('')
+    const [shardStarting, setShardStarting] = useState(false)
+    const [shardPlan, setShardPlan] = useState('')
     const agentId = useMemo(() => {
         const k = 'helix-agent-id'
         let v = mmkv.getString(k)
@@ -135,6 +166,10 @@ const HelixMeshScreen = () => {
                 skills: ['chat'],
                 task_types: ['chat'],
                 models: ['local'],
+                mem: deviceTotalMemory(),
+                // Only set once this phone is actually serving layers — its absence is what tells
+                // the host "answers prompts, but don't place layers here".
+                ...(shardRpcAddr ? { rpc: shardRpcAddr } : {}),
             })
             const node = new HelixAgentNode(agentId, AGENT_SECRET, runner, {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
@@ -240,6 +275,82 @@ const HelixMeshScreen = () => {
             Logger.errorToast(`Run failed: ${e instanceof Error ? e.message : String(e)}`)
         } finally {
             setHostRunning(false)
+        }
+    }
+
+    // Worker side: run llama.cpp's rpc-server on this phone and tell the coordinator it can hold
+    // layers (address + RAM). There is no stop API for the server — once started it serves for the
+    // process's lifetime — so this is a one-way switch, and the UI says so.
+    const onShareCompute = async () => {
+        const ip = await getLanIp()
+        if (!ip) {
+            Logger.errorToast("Couldn't detect this phone's Wi-Fi address — can't be a shard worker")
+            return
+        }
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { startRpcServer } = require('cui-llama.rn')
+            const ok = await startRpcServer(`0.0.0.0:${RPC_PORT}`)
+            if (!ok) {
+                Logger.errorToast(`Could not start the shard worker on :${RPC_PORT}`)
+                return
+            }
+            const addr = `${ip}:${RPC_PORT}`
+            setShardRpcAddr(addr)
+            // Announce it so the host can place layers here. If we've already joined, patch the
+            // live card; otherwise onJoinAgent picks it up when joining.
+            agentRef.current?.updateCard({ rpc: addr, mem: deviceTotalMemory() })
+            Logger.infoToast(`Sharing compute — ${addr}`)
+        } catch (e) {
+            Logger.errorToast(`Shard worker failed: ${e instanceof Error ? e.message : String(e)}`)
+        }
+    }
+
+    // Host side: plan the split across the joined phones and load the model distributed. It goes
+    // through the normal model load, so the sharded model becomes the app's context and can be
+    // chatted with like any other.
+    const onStartShard = async () => {
+        const coord = coordRef.current
+        if (!coord) return
+        const model = Llama.useLlamaModelStore.getState().model
+        if (!model) {
+            Logger.errorToast('Load the model you want to shard first (Models)')
+            return
+        }
+        if (!hostIp) {
+            Logger.errorToast("Couldn't detect this phone's Wi-Fi address — can't drive a shard")
+            return
+        }
+        setShardStarting(true)
+        setShardPlan('')
+        try {
+            const nLayers = await readLayerCount(model.file_path)
+            if (!nLayers) {
+                Logger.errorToast("Couldn't read the model's layer count from its GGUF")
+                return
+            }
+            const plan = planLocalShard(
+                { model_id: model.name, n_layers: nLayers, model_bytes: model.file_size },
+                { id: `host-${agentId}`, mem: deviceTotalMemory(), rpc: `${hostIp}:${RPC_PORT}` },
+                coord.agentInfo()
+            )
+            setShardPlan(
+                plan.endpoints
+                    .map((e) => `${e.role === 'main' ? 'this phone' : e.node}: layers ${e.band[0]}–${e.band[1]}`)
+                    .join('\n')
+            )
+            // Reload the model distributed. unload() first: load() refuses a model that's already
+            // loaded, and we're deliberately replacing the single-device context with a shared one.
+            await Llama.useLlamaModelStore.getState().unload()
+            await Llama.useLlamaModelStore.getState().load(model, {
+                rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
+                tensor_split: plan.tensor_split,
+            })
+            Logger.infoToast(`Sharded across ${plan.ring.length} phones`)
+        } catch (e) {
+            Logger.errorToast(`Shard failed: ${e instanceof Error ? e.message : String(e)}`)
+        } finally {
+            setShardStarting(false)
         }
     }
 
@@ -465,6 +576,55 @@ const HelixMeshScreen = () => {
                             ? `● online as ${agentId} — answering mesh tasks`
                             : `◌ ${agentId} — connection lost, reconnecting…`}
                     </Text>
+                )}
+            </View>
+
+            <View style={styles.agentBox}>
+                <Text style={styles.section}>Sharding — one big model across phones</Text>
+                <Text style={styles.dim}>
+                    Splits a model too big for one phone by layers, using llama.cpp's RPC. Every
+                    phone taking part shares its RAM; the host loads the model and drives it.
+                </Text>
+
+                <Text style={[styles.node, styles.gap]}>On this phone</Text>
+                {shardRpcAddr ? (
+                    <Text style={styles.node}>● sharing compute at {shardRpcAddr}</Text>
+                ) : (
+                    <ThemedButton
+                        label="Share this phone's RAM"
+                        variant="secondary"
+                        onPress={onShareCompute}
+                        buttonStyle={styles.gap}
+                    />
+                )}
+                {!shardRpcAddr && (
+                    <Text style={styles.dim}>
+                        Can't be switched off without restarting the app — llama.cpp's rpc-server
+                        has no stop.
+                    </Text>
+                )}
+
+                {hosting && (
+                    <>
+                        <Text style={[styles.node, styles.gap]}>As host</Text>
+                        <Text style={styles.dim}>
+                            Load the model you want to shard (Models), make sure the other phones
+                            joined and tapped "Share this phone's RAM", then start.
+                        </Text>
+                        <ThemedButton
+                            label={shardStarting ? 'Starting…' : 'Shard the loaded model'}
+                            variant="primary"
+                            onPress={onStartShard}
+                            buttonStyle={styles.gap}
+                        />
+                        {shardStarting && <ActivityIndicator color={color.text._100} style={styles.gap} />}
+                        {!!shardPlan && (
+                            <View style={styles.resultBox}>
+                                <Text style={styles.section}>Layer split</Text>
+                                <Text style={styles.result}>{shardPlan}</Text>
+                            </View>
+                        )}
+                    </>
                 )}
             </View>
 

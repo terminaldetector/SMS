@@ -36,6 +36,12 @@ export type CompletionOutput = {
     timings: CompletionTimings
 }
 
+// Topology for a distributed (sharded) load — comes from HELIX's planner, see lib/helixPlacement.ts.
+export type ShardParams = {
+    rpc_servers: string[] // worker "host:port" rpc-servers, ring order
+    tensor_split: number[] // ratios across [this phone, worker0, worker1, …]
+}
+
 export type LlamaState = {
     context: LlamaContext | undefined
     model?: ModelDataType
@@ -43,7 +49,10 @@ export type LlamaState = {
     loadProgress: number
     chatCount: number
     promptCache?: string
-    load: (model: ModelDataType) => Promise<void>
+    // `shard` (HELIX Level 3) loads the model distributed across other phones' llama.cpp
+    // rpc-servers instead of wholly on this one. It goes through the normal load path on purpose:
+    // the sharded context then IS the app's context, so chats use it like any other model.
+    load: (model: ModelDataType, shard?: ShardParams) => Promise<void>
     loadMmproj: (model: ModelDataType) => Promise<void>
     setLoadProgress: (progress: number) => void
     unload: () => Promise<void>
@@ -141,7 +150,7 @@ export namespace Llama {
         loadProgress: 0,
         chatCount: 0,
         promptCache: undefined,
-        load: async (model: ModelDataType) => {
+        load: async (model: ModelDataType, shard?: ShardParams) => {
             const config = useLlamaPreferencesStore.getState().config
 
             if (get()?.model?.id === model.id) {
@@ -177,10 +186,18 @@ export namespace Llama {
                 use_mlock: true,
                 use_mmap: true,
                 devices: config.devices,
+                // Present only for a sharded load: llama.cpp registers each rpc-server as a remote
+                // device and splits the layers by these ratios.
+                ...(shard ? { rpc_servers: shard.rpc_servers, tensor_split: shard.tensor_split } : {}),
             }
 
             Logger.info(
-                `\n------ MODEL LOAD -----\n Model Name: ${model.name}\nStarting with parameters: \nContext Length: ${params.n_ctx}\nThreads: ${params.n_threads}\nBatch Size: ${params.n_batch}\nGPU Layers: ${params.n_gpu_layers}`
+                `\n------ MODEL LOAD -----\n Model Name: ${model.name}\nStarting with parameters: \nContext Length: ${params.n_ctx}\nThreads: ${params.n_threads}\nBatch Size: ${params.n_batch}\nGPU Layers: ${params.n_gpu_layers}` +
+                    (shard
+                        ? `\nSharded across: ${shard.rpc_servers.join(', ')}\nTensor split: ${shard.tensor_split
+                              .map((x) => x.toFixed(3))
+                              .join(', ')}`
+                        : '')
             )
 
             const progressCallback = (progress: number) => {

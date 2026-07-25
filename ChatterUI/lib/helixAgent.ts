@@ -17,6 +17,10 @@ export interface AgentCard {
     mem?: number
     tps?: number
     batt?: number
+    // "host:port" of this phone's llama.cpp rpc-server, when it is offering itself as a shard
+    // worker (Level 3). The coordinator needs it to build llama.cpp's --rpc list; absent means
+    // "agent only, don't place layers on me". Mirrors the `rpc` field in HELIX ANNOUNCE.
+    rpc?: string
 }
 
 export interface AgentRunner {
@@ -184,8 +188,18 @@ export class HelixAgentNode {
         this.send(this.codec.seal(Msg.AGENT_ANNOUNCE, {
             agent_id: c.agent_id, models: c.models ?? [], skills: c.skills ?? [],
             task_types: c.task_types ?? [], mem: c.mem ?? 0, tps: c.tps ?? 0, batt: c.batt ?? 1.0,
+            // Only sent when this phone is actually serving as a shard worker, so the coordinator
+            // can tell "can hold layers" from "answers prompts only" (see AgentCard.rpc).
+            ...(c.rpc ? { rpc: c.rpc } : {}),
         }))
         this.send(this.codec.seal(Msg.STATUS, { busy: false }))
+    }
+
+    // Re-announce with an updated card — e.g. once the rpc-server is up and this phone can offer
+    // itself as a shard worker, without tearing down and rejoining the mesh.
+    updateCard(patch: Partial<AgentCard>) {
+        this.card = { ...this.card, ...patch }
+        this.announce()
     }
 
     private onMessage(bytes: Uint8Array) {

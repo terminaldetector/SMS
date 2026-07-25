@@ -42,7 +42,12 @@ export class Coordinator {
       const known = this.conns.get(msg.src)
       if (known) known.lastSeen = Date.now()  // any traffic counts as liveness
       if (msg.type === Msg.AGENT_ANNOUNCE) {
-        this.conns.set(msg.src, { conn, lastSeen: Date.now() })
+        // mem/rpc are what Level 3 sharding places layers by (helixPlacement.ts); rpc is absent
+        // for an agent that only answers prompts and isn't offering to hold layers.
+        this.conns.set(msg.src, {
+          conn, lastSeen: Date.now(),
+          mem: Number(msg.body.mem ?? 0), rpc: String(msg.body.rpc ?? ''),
+        })
       } else if (msg.type === Msg.RESULT) {
         const c = this._coll.get(msg.tid); if (c) c.results[msg.src] = String(msg.body.text ?? '')
       } else if (msg.type === Msg.VOTE) {
@@ -63,6 +68,14 @@ export class Coordinator {
       try { a.conn.close() } catch {}
     }
     return [...this.conns.keys()]
+  }
+
+  // Live agents plus what sharding needs to place layers on them (mirrors helixCoordinator.ts).
+  agentInfo() {
+    return this.agents().map((id) => {
+      const a = this.conns.get(id)
+      return { id, mem: a.mem, rpc: a.rpc }
+    })
   }
 
   async infer(prompt, mode = 'single', { timeoutMs = 8000 } = {}) {

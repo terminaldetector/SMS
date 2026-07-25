@@ -5,6 +5,8 @@
 // (helix/host/control_server.py): ping/status/nodes/infer/super. Proven end-to-end against the
 // real Python mesh by integration/chatterui_llamacpp/js/http_smoke.mjs.
 
+import type { RpcClusterPlan as ShardPlan } from './helixPlacement'
+
 export type InferMode = 'single' | 'parallel' | 'voting'
 export type SuperStrategy = 'hierarchical' | 'ensemble'
 
@@ -83,11 +85,8 @@ export class HelixClient {
     }
 }
 
-export interface RpcClusterPlan {
+// The same plan helixPlacement.ts produces in-app, plus the control server's ok/error envelope —
+// so a plan is one shape whether it was computed here or fetched from a Python coordinator.
+export interface RpcClusterPlan extends ShardPlan {
     ok: boolean
-    ring: string[]
-    endpoints: { node: string; addr: string; band: [number, number]; role: 'main' | 'worker' }[]
-    main: string
-    rpc_arg: string // "h1:p1,h2:p2" -> llama.cpp --rpc (workers)
-    tensor_split: number[] // -> --tensor-split, spans [main-local, worker0, ...]
 }

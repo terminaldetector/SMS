@@ -32,7 +32,19 @@ function loadTcp(): TcpModule {
 }
 
 type Collected = { results: Record<string, string>; votes: Record<string, [string, number]> }
-type Agent = { conn: WsServerConnection; lastSeen: number }
+type Agent = {
+    conn: WsServerConnection
+    lastSeen: number
+    mem: number // bytes the agent announced — the weight sharding places layers by
+    rpc: string // "host:port" of its llama.cpp rpc-server, '' if it isn't offering to hold layers
+}
+
+// What the host needs about each joined phone to plan a shard (see helixPlacement.ts).
+export interface AgentInfo {
+    id: string
+    mem: number
+    rpc: string
+}
 
 // An agent announces every ~500ms (helixAgent.ts). If a phone drops off the Wi-Fi mid-session the
 // TCP connection can sit half-open — no 'close' event ever arrives — so silence is what actually
@@ -76,7 +88,12 @@ export class HelixCoordinator {
             const known = this.conns.get(msg.src)
             if (known) known.lastSeen = Date.now() // any traffic counts as liveness
             if (msg.type === Msg.AGENT_ANNOUNCE) {
-                this.conns.set(msg.src, { conn, lastSeen: Date.now() })
+                this.conns.set(msg.src, {
+                    conn,
+                    lastSeen: Date.now(),
+                    mem: Number(msg.body.mem ?? 0),
+                    rpc: String(msg.body.rpc ?? ''),
+                })
             } else if (msg.type === Msg.RESULT) {
                 const c = this.coll.get(msg.tid)
                 if (c) c.results[msg.src] = String(msg.body.text ?? '')
@@ -102,6 +119,15 @@ export class HelixCoordinator {
             }
         }
         return [...this.conns.keys()]
+    }
+
+    // Live agents with what sharding needs to place layers on them. agents() first, so stale ones
+    // are pruned here too rather than being planned into a ring that no longer exists.
+    agentInfo(): AgentInfo[] {
+        return this.agents().map((id) => {
+            const a = this.conns.get(id)!
+            return { id, mem: a.mem, rpc: a.rpc }
+        })
     }
 
     async infer(prompt: string, mode: 'single' | 'voting' = 'single', timeoutMs = 60000): Promise<string> {
