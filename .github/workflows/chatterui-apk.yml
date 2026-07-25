@@ -68,11 +68,20 @@ jobs:
       # but ChatterUI/package.json points at it directly via file:, and its package.json main/types
       # fields point at lib/, so ChatterUI's npm install can't resolve the module without this.
       # --ignore-scripts skips its postinstall (downloads prebuilt non-RPC .so's we don't want here).
+      #
+      # The node_modules this needs MUST then be deleted. node_modules/cui-llama.rn is a symlink, so
+      # Metro resolves the fork's imports from its real path — and the fork's devDependencies pull
+      # in their own React Native (0.72). Bundling a second React Native is fatal: cui-llama.rn gets
+      # its TurboModuleRegistry from an instance the app never initialised, so
+      # TurboModuleRegistry.get('RNLlama') is null and every native call fails with
+      # "Cannot read property 'install' of null". metro.config.js also blocks this directory, so the
+      # two defences are independent.
       - name: Build cui-llama.rn RPC fork's JS/TS output
         working-directory: forks/cui-llama.rn-rpc
         run: |
           npm install --no-audit --no-fund --ignore-scripts
           npm run build
+          rm -rf node_modules
 
       - name: Install JS dependencies
         env:
