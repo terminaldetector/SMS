@@ -22,8 +22,11 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -32,6 +35,8 @@ import java.net.NetworkInterface
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+
+private const val TAG = "BitchatBle"
 
 /**
  * BLE transport for BitChat interop — the one piece of the bridge that must be native.
@@ -94,18 +99,11 @@ class BitchatBleModule : Module() {
     // This phone's LAN address, for the QR connect code and the shard worker's announced endpoint.
     // It lives in this module because it is the only native code we own, and because the obvious
     // alternative does not work: expo-network reads WifiManager, which reports 0.0.0.0 on plenty of
-    // modern devices (restricted Wi-Fi info, tethering, or simply being on a hotspot). Enumerating
-    // the interfaces needs no permission and also finds the address when the phone IS the hotspot.
+    // modern devices (restricted Wi-Fi info, tethering, or simply being on a hotspot).
     Function("getLocalIpAddress") {
-      runCatching {
-        NetworkInterface.getNetworkInterfaces().toList()
-          .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
-          .flatMap { it.inetAddresses.toList() }
-          .firstOrNull { addr ->
-            addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress
-          }
-          ?.hostAddress ?: ""
-      }.getOrDefault("")
+      val addr = wifiStationIpAddress() ?: fallbackInterfaceIpAddress()
+      Log.i(TAG, "getLocalIpAddress -> '$addr'")
+      addr
     }
 
     // Plenty of chipsets can scan but not advertise; the caller needs to know before promising a
@@ -167,6 +165,52 @@ class BitchatBleModule : Module() {
       stopScan()
       disconnectClients()
     }
+  }
+
+  // --- LAN address -----------------------------------------------------------------------------
+
+  // The address other phones on the SAME Wi-Fi (join, QR, shard worker) can actually reach. Blindly
+  // enumerating interfaces used to pick whichever came first, which on a phone with its own hotspot
+  // or Wi-Fi Direct group active meant the AP-side address (192.168.49.1, the standard Android
+  // softAP/Wi-Fi-Direct subnet) instead of the wlan0 station address every other phone on the
+  // router actually shares — reachable only from THIS phone's own hotspot clients, so every
+  // announce/join/RPC dial against it timed out ("Failed to load model info", etc.) even though the
+  // BLE side connected fine.
+  //
+  // ConnectivityManager reports the network this phone's own traffic is actually routed through, so
+  // asking for its Wi-Fi transport's address is the direct way to get the LAN one instead of
+  // guessing from interface order.
+  private fun wifiStationIpAddress(): String? = runCatching {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+      ?: return@runCatching null
+    val network = cm.activeNetwork ?: return@runCatching null
+    val caps = cm.getNetworkCapabilities(network) ?: return@runCatching null
+    // A phone that is only RUNNING its own hotspot (not joined to someone else's Wi-Fi) has no
+    // active network with TRANSPORT_WIFI here — tethering isn't a station connection — so this
+    // correctly falls through to fallbackInterfaceIpAddress() for that setup instead of finding
+    // nothing and reporting undetected.
+    if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return@runCatching null
+    cm.getLinkProperties(network)?.linkAddresses
+      ?.mapNotNull { it.address as? Inet4Address }
+      ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+      ?.hostAddress
+  }.getOrNull()
+
+  // Only used when this phone has no Wi-Fi station connection to ask ConnectivityManager about
+  // (it's acting as its own hotspot, or Wi-Fi is off and only some other interface is up). AP/tether
+  // interfaces are still tried, just last: sorting them after everything else means a real
+  // wlan/eth station address wins whenever one exists, and one of these is only picked as a last
+  // resort.
+  private fun fallbackInterfaceIpAddress(): String {
+    val apLike = Regex("^(ap|softap|swlan)\\d*$", RegexOption.IGNORE_CASE)
+    return runCatching {
+      NetworkInterface.getNetworkInterfaces().toList()
+        .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+        .sortedBy { if (apLike.matches(it.name)) 1 else 0 }
+        .flatMap { it.inetAddresses.toList() }
+        .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress }
+        ?.hostAddress ?: ""
+    }.getOrDefault("")
   }
 
   // --- permissions ---------------------------------------------------------------------------

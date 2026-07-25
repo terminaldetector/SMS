@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 
+    <!-- getLocalIpAddress() asks ConnectivityManager which network this phone is actually routed
+         through, so it reports the real Wi-Fi LAN address instead of guessing from interface
+         order. This is a normal (install-time) permission, not a runtime one. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- neverForLocation lets us scan without holding a location permission: this mesh only cares
          which peers are reachable, never where they are. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
