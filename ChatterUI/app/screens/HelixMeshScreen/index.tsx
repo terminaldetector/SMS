@@ -10,10 +10,11 @@ import { AntDesign } from '@expo/vector-icons'
 import * as ExpoCrypto from 'expo-crypto'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
-import { useMMKVString } from 'react-native-mmkv'
+import { useMMKVBoolean, useMMKVString } from 'react-native-mmkv'
 
 import ThemedButton from '@components/buttons/ThemedButton'
 import HorizontalSelector from '@components/input/HorizontalSelector'
+import ThemedSwitch from '@components/input/ThemedSwitch'
 import ThemedTextInput from '@components/input/ThemedTextInput'
 import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
@@ -22,7 +23,9 @@ import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
+import { httpBaseFromHost, servedModelFromFile, syncModelFromHost } from '@lib/helixModelSync'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
+import { Model } from '@lib/engine/Local/Model'
 import { Logger } from '@lib/state/Logger'
 import { mmkv } from '@lib/storage/MMKV'
 import { Theme } from '@lib/theme/ThemeManager'
@@ -30,6 +33,9 @@ import { Theme } from '@lib/theme/ThemeManager'
 const HOST_KEY = 'helix-mesh-host'
 const WS_KEY = 'helix-agent-ws'
 const LAST_HOST_IP_KEY = 'helix-mesh-last-host-ip'
+// Whether a host offers its GGUF to joining phones, and whether a joining phone accepts it.
+// Default ON — the whole point is that the second phone doesn't need the file passed to it by hand.
+const MODEL_TRANSFER_KEY = 'helix-mesh-model-transfer'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
@@ -132,6 +138,13 @@ const HelixMeshScreen = () => {
     const [showQrSheet, setShowQrSheet] = useState(false)
     const agentRef = useRef<HelixAgentNode | null>(null)
 
+    // Model transfer: the host serves its GGUF on the same port, the joining phone pulls it if it
+    // doesn't already have that exact file. useMMKVBoolean returns undefined until it's been set,
+    // hence the `!== false` reads below — unset means on.
+    const [modelTransfer, setModelTransfer] = useMMKVBoolean(MODEL_TRANSFER_KEY)
+    const transferOn = modelTransfer !== false
+    const [transferText, setTransferText] = useState('')
+
     // Device-to-device (no PC): this phone hosts the coordinator.
     const [hosting, setHosting] = useState(false)
     const [hostStarting, setHostStarting] = useState(false)
@@ -168,18 +181,54 @@ const HelixMeshScreen = () => {
         return base ? new HelixClient(base) : null
     }, [host])
 
+    // Pull the host's model onto this phone (skipped when we already have that exact file), and
+    // load it if nothing is loaded yet — so joining is one tap even on a phone that has never seen
+    // the model, instead of exporting a multi-gigabyte GGUF and passing it around by Share.
+    // A model that IS loaded is never replaced: that's the user's choice, not ours.
+    const transferModelFromHost = async (wsAddr: string) => {
+        const base = httpBaseFromHost(wsAddr)
+        if (!base) return
+        setTransferText('Checking what the host offers…')
+        const t = await syncModelFromHost(base, ({ received, total }) => {
+            const pct = total > 0 ? Math.floor((received / total) * 100) : 0
+            setTransferText(`Downloading the host's model… ${pct}%`)
+        })
+        if (!t) {
+            setTransferText('') // host isn't offering one — not an error, just nothing to do
+            return
+        }
+        if (t.downloaded) Logger.infoToast(`Received ${t.downloaded} from the host`)
+        setTransferText('')
+
+        const store = Llama.useLlamaModelStore.getState()
+        if (store.context) return
+        const row = (await Model.getModelListQuery()).find((m) => m.file === t.offer.name)
+        if (row) await store.load(row)
+    }
+
     const onJoinAgent = async () => {
         const url = normalizeWs(wsUrl ?? '')
         if (!url) {
             Logger.errorToast('Enter the coordinator address (e.g. 192.168.1.10:8790)')
             return
         }
+        setAgentJoining(true)
+        if (transferOn) {
+            try {
+                await transferModelFromHost(url)
+            } catch (e) {
+                // A failed transfer is not a failed join: this phone may already have a model of
+                // its own, which is the pre-transfer behaviour and still perfectly valid.
+                setTransferText('')
+                Logger.warnToast(`Model transfer failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
+        }
         const store = Llama.useLlamaModelStore.getState()
         if (!store.context) {
             Logger.errorToast('Load a model in ChatterUI first (Models), then join')
+            setAgentJoining(false)
             return
         }
-        setAgentJoining(true)
         try {
             const runner = makeLlamaAgentRunner(store, {
                 agent_id: agentId,
@@ -247,6 +296,22 @@ const HelixMeshScreen = () => {
         }
     }
 
+    // Point the coordinator at this phone's loaded GGUF so a joining phone can pull it instead of
+    // being sent the file by hand. Only the loaded model is offered: it is unambiguously the one
+    // this mesh session is about, and it is the one already known to exist on disk.
+    const offerLoadedModel = (coord: HelixCoordinator, enabled: boolean) => {
+        const model = Llama.useLlamaModelStore.getState().model
+        coord.offerModel(
+            enabled && model ? servedModelFromFile(model.file_path, model.file, model.file_size) : null
+        )
+    }
+
+    // Keep the offer in step with the switch while hosting, so turning it off actually stops
+    // serving rather than only applying to the next session.
+    useEffect(() => {
+        if (coordRef.current && hosting) offerLoadedModel(coordRef.current, transferOn)
+    }, [transferOn, hosting])
+
     const onStartHost = async () => {
         setHostStarting(true)
         try {
@@ -255,6 +320,7 @@ const HelixMeshScreen = () => {
             })
             await coord.listen(HOST_PORT, '0.0.0.0')
             coordRef.current = coord
+            offerLoadedModel(coord, transferOn)
             setHosting(true)
             setHostAgents([])
             await detectAndSetHostIp()
@@ -507,6 +573,16 @@ const HelixMeshScreen = () => {
                     This phone becomes the coordinator. The other ChatterUI phone loads a model and
                     uses "Join as agent" below, pointed at this phone's address. No PC needed.
                 </Text>
+                <ThemedSwitch
+                    label="Send the model between phones"
+                    description={
+                        'The host serves its loaded GGUF on the same port, and a phone joining it ' +
+                        'downloads that file if it does not already have it — no exporting and ' +
+                        'sharing the model by hand. Turn off to keep every phone on its own model.'
+                    }
+                    value={transferOn}
+                    onChangeValue={setModelTransfer}
+                />
                 <ThemedButton
                     label={hostStarting ? 'Starting…' : hosting ? 'Stop hosting' : 'Start hosting'}
                     variant={hosting ? 'critical' : 'primary'}
@@ -518,6 +594,13 @@ const HelixMeshScreen = () => {
                         <Text style={styles.node}>
                             ● hosting on port {HOST_PORT}
                             {hostIp ? ` — other phone joins ${hostIp}:${HOST_PORT}` : ''}
+                        </Text>
+                        <Text style={styles.dim}>
+                            {!transferOn
+                                ? 'Not sending the model — each phone uses its own.'
+                                : coordRef.current?.modelOffered()
+                                  ? `Offering ${coordRef.current.modelOffered()} to phones that join`
+                                  : 'No model loaded, so there is nothing to send — load one in Models and restart hosting.'}
                         </Text>
                         <TouchableOpacity onPress={() => setShowQrSheet(true)}>
                             <Text style={[styles.dim, styles.gap]}>
@@ -576,8 +659,11 @@ const HelixMeshScreen = () => {
             <View style={styles.agentBox}>
                 <Text style={styles.section}>Join as agent (this phone's model)</Text>
                 <Text style={styles.dim}>
-                    Share your loaded model with a mesh coordinator over WebSocket. Load a model in
-                    Models first, then tap the QR icon (top right) → Scan, or type its address below.
+                    Share your loaded model with a mesh coordinator over WebSocket. Tap the QR icon
+                    (top right) → Scan, or type its address below.
+                    {transferOn
+                        ? " If this phone doesn't have the host's model yet, joining downloads it first."
+                        : ' Load a model in Models first — sending the model between phones is off.'}
                 </Text>
                 <ThemedTextInput
                     label="Coordinator (ws host:port)"
@@ -594,6 +680,7 @@ const HelixMeshScreen = () => {
                     onPress={agentJoined ? onLeaveAgent : onJoinAgent}
                     buttonStyle={styles.gap}
                 />
+                {!!transferText && <Text style={[styles.node, styles.gap]}>{transferText}</Text>}
                 {agentJoined && (
                     <Text style={styles.node}>
                         {agentOnline

@@ -10,7 +10,8 @@
 
 import { FrameCodec, Msg, RandomBytes } from './helixFrame'
 import { sealerKey } from './helixCrypto'
-import { StreamSock, WsServerConnection } from './helixWsServer'
+import { handleModelRequest, ServedModel } from './helixModelServe'
+import { HttpRequest, HttpResponder, StreamSock, WsServerConnection } from './helixWsServer'
 
 const td = new TextDecoder()
 
@@ -56,6 +57,9 @@ export class HelixCoordinator {
     private server: TcpServer | null = null
     private conns = new Map<string, Agent>() // agentId -> connection + liveness
     private coll = new Map<string, Collected>() // tid -> collected results/votes
+    // The GGUF this host hands to a joining phone that doesn't have it yet. Null = offer nothing,
+    // which is what the "don't send my model" setting leaves it as.
+    private served: ServedModel | null = null
 
     constructor(
         private readonly nodeId: string,
@@ -75,8 +79,34 @@ export class HelixCoordinator {
         })
     }
 
+    // Offer (or stop offering) this host's model to joining phones. Safe to call while hosting.
+    offerModel(model: ServedModel | null) {
+        this.served = model
+    }
+
+    modelOffered(): string {
+        return this.served?.name ?? ''
+    }
+
+    private onHttp = (req: HttpRequest, res: HttpResponder) => {
+        void handleModelRequest(req, res, this.served)
+            .then((handled) => {
+                if (!handled) res.send(404, { 'Content-Type': 'text/plain' }, 'not found')
+            })
+            .catch(() => {
+                // A read failure mid-stream can't be turned into a status code any more — the
+                // headers are long gone — so all that's left is to drop the connection and let the
+                // downloader retry with a Range request.
+                try {
+                    res.end()
+                } catch {
+                    /* ignore */
+                }
+            })
+    }
+
     private onSocket(socket: StreamSock) {
-        const conn = new WsServerConnection(socket)
+        const conn = new WsServerConnection(socket, { onHttp: this.onHttp })
         const state = { remoteId: null as string | null }
         conn.onBinary((payload) => {
             if (state.remoteId === null) {

@@ -55,20 +55,69 @@ function toBytes(d: unknown): Uint8Array {
 export interface StreamSock {
     on(event: 'data', cb: (data: unknown) => void): void
     on(event: 'close' | 'error', cb: () => void): void
-    write(data: Uint8Array): void
+    // The encoding/callback form is what both react-native-tcp-socket and Node's net.Socket
+    // provide. The callback fires once the bytes are actually out, which is the only backpressure
+    // signal available — a multi-gigabyte model transfer would otherwise queue the whole file in
+    // memory.
+    write(data: Uint8Array | string, encoding?: string, cb?: (err?: unknown) => void): void
     destroy?(): void
+}
+
+export interface HttpRequest {
+    method: string
+    path: string
+    headers: Record<string, string>
+}
+
+// Writes one HTTP response back over the raw socket. Bodies are handed over base64-encoded because
+// that is the form the file layer reads in and the socket writes out, so the bytes never have to be
+// materialised as a JS array on the way through.
+export interface HttpResponder {
+    /** Short response, written and closed in one go. */
+    send(status: number, headers: Record<string, string>, body?: string): void
+    /** Status line + headers only; the caller then streams the body itself. */
+    beginStream(status: number, headers: Record<string, string>): void
+    /** Resolves once the chunk has actually left the socket. Rejects if the peer went away. */
+    writeBase64(chunk: string): Promise<void>
+    end(): void
+    /** True once the peer hung up — a long transfer should check this and stop. */
+    readonly closed: boolean
+}
+
+export type HttpHandler = (req: HttpRequest, res: HttpResponder) => void
+
+const STATUS_TEXT: Record<number, string> = {
+    200: 'OK',
+    206: 'Partial Content',
+    404: 'Not Found',
+    416: 'Range Not Satisfiable',
+    500: 'Internal Server Error',
 }
 
 export class WsServerConnection {
     private buf = new Uint8Array(0)
     private handshaken = false
+    // Set once the connection turned out to be plain HTTP rather than a WebSocket upgrade; from
+    // then on nothing more is parsed off it.
+    private hijacked = false
+    private dead = false
+    private readonly socket: StreamSock
+    private readonly onHttp: HttpHandler | null
     private _onBinary: (p: Uint8Array) => void = () => {}
     private _onClose: () => void = () => {}
 
-    constructor(private readonly socket: StreamSock) {
+    constructor(socket: StreamSock, opts: { onHttp?: HttpHandler } = {}) {
+        this.socket = socket
+        this.onHttp = opts.onHttp ?? null
         socket.on('data', (d) => this.onData(toBytes(d)))
-        socket.on('close', () => this._onClose())
-        socket.on('error', () => this._onClose())
+        socket.on('close', () => {
+            this.dead = true
+            this._onClose()
+        })
+        socket.on('error', () => {
+            this.dead = true
+            this._onClose()
+        })
     }
 
     onBinary(cb: (p: Uint8Array) => void) { this._onBinary = cb }
@@ -81,14 +130,66 @@ export class WsServerConnection {
         this.buf = m
     }
 
+    // Serves one plain-HTTP request on a connection that turned out not to be a WebSocket upgrade.
+    // The host reuses its single listening port for both, so a phone only ever needs one address.
+    private serveHttp(head: string) {
+        const lines = head.split('\r\n')
+        const [method = '', path = ''] = lines[0].split(' ')
+        const headers: Record<string, string> = {}
+        for (const line of lines.slice(1)) {
+            const i = line.indexOf(':')
+            if (i > 0) headers[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim()
+        }
+        const writeHead = (status: number, h: Record<string, string>) => {
+            let out = `HTTP/1.1 ${status} ${STATUS_TEXT[status] ?? 'OK'}\r\n`
+            for (const [k, v] of Object.entries(h)) out += `${k}: ${v}\r\n`
+            this.socket.write(te.encode(out + '\r\n'))
+        }
+        // `res.closed` has to read live state, and a getter in an object literal binds `this` to
+        // that literal, so it needs the instance by name.
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        const self = this
+        const res: HttpResponder = {
+            get closed() {
+                return self.dead
+            },
+            send: (status, h, body = '') => {
+                const bytes = te.encode(body)
+                writeHead(status, { ...h, 'Content-Length': String(bytes.length), Connection: 'close' })
+                if (bytes.length) this.socket.write(bytes)
+                this.socket.destroy?.()
+            },
+            beginStream: (status, h) => writeHead(status, { ...h, Connection: 'close' }),
+            writeBase64: (chunk) =>
+                new Promise<void>((resolve, reject) => {
+                    if (this.dead) return reject(new Error('peer disconnected'))
+                    this.socket.write(chunk, 'base64', (err) => (err ? reject(err) : resolve()))
+                }),
+            end: () => this.socket.destroy?.(),
+        }
+        this.onHttp!({ method, path, headers }, res)
+    }
+
     private onData(chunk: Uint8Array) {
+        if (this.hijacked) return
         this.append(chunk)
         if (!this.handshaken) {
             const s = td.decode(this.buf)
             const end = s.indexOf('\r\n\r\n')
             if (end < 0) return
             const key = (s.match(/sec-websocket-key:\s*(.+)\r\n/i) || [])[1]?.trim()
-            if (!key) { this.socket.destroy?.(); return }
+            if (!key) {
+                // Not an upgrade. A plain GET is how a joining phone pulls the host's model, so
+                // hand it to the HTTP handler if there is one; otherwise behave as before.
+                if (this.onHttp) {
+                    this.hijacked = true
+                    this.buf = new Uint8Array(0)
+                    this.serveHttp(s.slice(0, end))
+                    return
+                }
+                this.socket.destroy?.()
+                return
+            }
             const resp =
                 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
                 `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`
