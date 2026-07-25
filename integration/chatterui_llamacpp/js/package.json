@@ -3,9 +3,11 @@
   "private": true,
   "type": "module",
   "description": "HELIX JS proofs + app-shippable codec for ChatterUI (pure-JS crypto via @noble)",
+  "comment": "Version ranges must match ChatterUI/package.json: the smokes import the app's real sources, and CI links this node_modules in as ChatterUI's own so those imports resolve. @noble 2.x drops the subpaths the app imports, so the ranges are not incidental.",
   "dependencies": {
     "@noble/ciphers": "^1.2.1",
     "@noble/curves": "^1.8.1",
-    "@noble/hashes": "^1.7.1"
+    "@noble/hashes": "^1.7.1",
+    "fflate": "^0.8.3"
   }
 }

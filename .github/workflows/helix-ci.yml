@@ -32,6 +32,13 @@ jobs:
         working-directory: integration/chatterui_llamacpp/js
         run: npm ci
 
+      # The smokes import the REAL app sources (ChatterUI/lib/*.ts) rather than twins that drift, so
+      # those files' own imports (@noble, fflate) have to resolve as well — and Node resolves them
+      # relative to ChatterUI, not to the smoke. The app's full install is far too heavy for this
+      # job, so ChatterUI borrows the one above; the versions are pinned to match ChatterUI's.
+      - name: Let the app sources resolve their packages
+        run: ln -s ../integration/chatterui_llamacpp/js/node_modules ChatterUI/node_modules
+
       - name: Python selftests
         run: |
           set -e
