@@ -87,23 +87,27 @@ npm i react-native-tcp-socket expo-network   # host role only; loaded lazily (ne
 > relying on the host feature. If startup breaks, the native dep is the cause — remove it and use the
 > PC coordinator path instead.
 
-**Test on 2 phones (same Wi-Fi):** phone A → **Device-to-device → Start hosting** (shows its
-`IP:8790` **and a QR code** encoding `ws://IP:8790`); phone B → load a GGUF model → **Join as
-agent** → tap **Scan QR** and point the camera at A's screen (or type `A_IP:8790` by hand); on A
-type a prompt → **Run on mesh** → phone B's model answers. Proven cross-language in-env by
+**Test on 2 phones (same Wi-Fi):** phone A → **Device-to-device → Start hosting**, then the QR icon
+(top right) → **My QR** (shows `IP:8790` as a QR); phone B → load a GGUF model → QR icon → **Scan**,
+point the camera at A's screen (or type `A_IP:8790` by hand under "Join as agent"); on A type a
+prompt → **Run on mesh** → phone B's model answers. Proven cross-language in-env by
 `node integration/chatterui_llamacpp/js/p2p_ws_smoke.mjs`.
 
 ### QR connect (easier onboarding, like BitChat)
 
-Scanning beats typing an IP. Extra files: `app_mod/components/views/QrScannerSheet.tsx` → `app/components/views/`.
-Extra dep (pure JS, renders on the existing `react-native-svg`, no native module):
+Scanning beats typing an IP. One entry point — a QR icon in the screen header, like BitChat's own
+identity QR — rather than buttons buried per-section: tap it for a sheet with **My QR** (this
+phone's connect code, once it's hosting) and **Scan** (read the other phone's). Extra file:
+`app_mod/components/views/HelixQrSheet.tsx` → `app/components/views/`. Extra dep (pure JS, renders
+on the existing `react-native-svg`, no native module):
 ```bash
 npm i react-native-qrcode-svg
 ```
-Scanning uses `expo-camera`'s barcode API — already a ChatterUI dep, nothing new to add there. The
-host renders its `ws://ip:port` as a QR (`react-native-qrcode-svg`); "Join as agent" gets a **Scan QR**
-button that opens the camera (`QrScannerSheet`) and fills the coordinator field from the scanned
-value. No protocol change — same `ws://host:port` string a person would otherwise type.
+Scanning uses `expo-camera`'s barcode API — already a ChatterUI dep, nothing new to add there. **My
+QR** renders the host's `ws://ip:port` (`react-native-qrcode-svg`) and offers "Start hosting" right
+there if it isn't hosting yet, plus a manual "Retry" if IP detection failed; **Scan** opens the
+camera and fills "Join as agent"'s coordinator field from the scanned value. No protocol change —
+same `ws://host:port` string a person would otherwise type.
 
 ## Notes
 - L1 needs no new dependency: the screen uses only `fetch`, `react-native-mmkv` (already a

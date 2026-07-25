@@ -6,17 +6,18 @@
 //                 ChatterUI phone joins it directly with "Join as agent" — no PC in the loop.
 // First-experiments UI.
 
+import { AntDesign } from '@expo/vector-icons'
 import * as ExpoCrypto from 'expo-crypto'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useMMKVString } from 'react-native-mmkv'
-import QRCode from 'react-native-qrcode-svg'
 
 import ThemedButton from '@components/buttons/ThemedButton'
 import HorizontalSelector from '@components/input/HorizontalSelector'
 import ThemedTextInput from '@components/input/ThemedTextInput'
+import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
-import QrScannerSheet from '@components/views/QrScannerSheet'
+import HelixQrSheet from '@components/views/HelixQrSheet'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
@@ -84,7 +85,7 @@ const HelixMeshScreen = () => {
     // Distinct from agentJoined: the session stays joined across a Wi-Fi drop while the node
     // reconnects, and the UI should say so rather than keep claiming "online".
     const [agentOnline, setAgentOnline] = useState(false)
-    const [showQrScanner, setShowQrScanner] = useState(false)
+    const [showQrSheet, setShowQrSheet] = useState(false)
     const agentRef = useRef<HelixAgentNode | null>(null)
 
     // Device-to-device (no PC): this phone hosts the coordinator.
@@ -174,6 +175,23 @@ const HelixMeshScreen = () => {
         return () => coordRef.current?.close()
     }, [])
 
+    // Shared by the initial detect (onStartHost) and the manual "Retry" in the QR sheet.
+    const detectAndSetHostIp = async () => {
+        const detected = await getLanIp()
+        if (detected) {
+            setHostIp(detected)
+            setHostIpIsStale(false)
+            mmkv.set(LAST_HOST_IP_KEY, detected)
+        } else {
+            // Detection can fail (permissions, timing, OEM quirks) even though the phone's IP
+            // hasn't actually changed since last time — showing last session's is still far
+            // better than sending the user to hunt for it in Settings.
+            const last = mmkv.getString(LAST_HOST_IP_KEY) ?? ''
+            setHostIp(last)
+            setHostIpIsStale(!!last)
+        }
+    }
+
     const onStartHost = async () => {
         setHostStarting(true)
         try {
@@ -184,19 +202,7 @@ const HelixMeshScreen = () => {
             coordRef.current = coord
             setHosting(true)
             setHostAgents([])
-            const detected = await getLanIp()
-            if (detected) {
-                setHostIp(detected)
-                setHostIpIsStale(false)
-                mmkv.set(LAST_HOST_IP_KEY, detected)
-            } else {
-                // Detection can fail (permissions, timing, OEM quirks) even though the phone's IP
-                // hasn't actually changed since last time — showing last session's is still far
-                // better than sending the user to hunt for it in Settings.
-                const last = mmkv.getString(LAST_HOST_IP_KEY) ?? ''
-                setHostIp(last)
-                setHostIpIsStale(!!last)
-            }
+            await detectAndSetHostIp()
             Logger.infoToast(`Hosting on :${HOST_PORT} — other phone joins this device`)
         } catch (e) {
             coordRef.current?.close()
@@ -277,6 +283,13 @@ const HelixMeshScreen = () => {
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
             <HeaderTitle title="HELIX Mesh" />
+            <HeaderButton
+                headerRight={() => (
+                    <TouchableOpacity onPress={() => setShowQrSheet(true)} hitSlop={12}>
+                        <AntDesign name="qrcode" size={26} color={color.text._100} />
+                    </TouchableOpacity>
+                )}
+            />
 
             <ThemedTextInput
                 label="HELIX node (host:port)"
@@ -371,26 +384,11 @@ const HelixMeshScreen = () => {
                             ● hosting on port {HOST_PORT}
                             {hostIp ? ` — other phone joins ${hostIp}:${HOST_PORT}` : ''}
                         </Text>
-                        {hostIp ? (
-                            <View style={[styles.qrBox, styles.gap]}>
-                                <QRCode value={`ws://${hostIp}:${HOST_PORT}`} size={160} />
-                                <Text style={styles.dim}>
-                                    Scan with the other phone's "Join as agent" → Scan QR
-                                </Text>
-                                {hostIpIsStale && (
-                                    <Text style={styles.dim}>
-                                        (address from last time — restart hosting once connected to
-                                        confirm it's still current)
-                                    </Text>
-                                )}
-                            </View>
-                        ) : (
-                            <Text style={styles.dim}>
-                                Couldn't detect this phone's Wi-Fi IP. Open Settings → Wi-Fi to find
-                                it, then enter that IP:{HOST_PORT} on the other phone's "Join as
-                                agent".
+                        <TouchableOpacity onPress={() => setShowQrSheet(true)}>
+                            <Text style={[styles.dim, styles.gap]}>
+                                Tap the QR icon (top right) to show the connect code
                             </Text>
-                        )}
+                        </TouchableOpacity>
                         <Text style={[styles.node, styles.gap]}>
                             Agents joined ({hostAgents.length})
                         </Text>
@@ -444,7 +442,7 @@ const HelixMeshScreen = () => {
                 <Text style={styles.section}>Join as agent (this phone's model)</Text>
                 <Text style={styles.dim}>
                     Share your loaded model with a mesh coordinator over WebSocket. Load a model in
-                    Models first.
+                    Models first, then tap the QR icon (top right) → Scan, or type its address below.
                 </Text>
                 <ThemedTextInput
                     label="Coordinator (ws host:port)"
@@ -455,20 +453,12 @@ const HelixMeshScreen = () => {
                     autoCorrect={false}
                     containerStyle={styles.gap}
                 />
-                <View style={[styles.row, styles.gap]}>
-                    <ThemedButton
-                        label={agentJoining ? 'Joining…' : agentJoined ? 'Leave mesh' : 'Join as agent'}
-                        variant={agentJoined ? 'critical' : 'primary'}
-                        onPress={agentJoined ? onLeaveAgent : onJoinAgent}
-                        buttonStyle={styles.flex}
-                    />
-                    <ThemedButton
-                        label="Scan QR"
-                        variant="secondary"
-                        onPress={() => setShowQrScanner(true)}
-                        buttonStyle={styles.flex}
-                    />
-                </View>
+                <ThemedButton
+                    label={agentJoining ? 'Joining…' : agentJoined ? 'Leave mesh' : 'Join as agent'}
+                    variant={agentJoined ? 'critical' : 'primary'}
+                    onPress={agentJoined ? onLeaveAgent : onJoinAgent}
+                    buttonStyle={styles.gap}
+                />
                 {agentJoined && (
                     <Text style={styles.node}>
                         {agentOnline
@@ -478,9 +468,17 @@ const HelixMeshScreen = () => {
                 )}
             </View>
 
-            <QrScannerSheet
-                visible={showQrScanner}
-                setVisible={setShowQrScanner}
+            <HelixQrSheet
+                visible={showQrSheet}
+                setVisible={setShowQrSheet}
+                hosting={hosting}
+                hostStarting={hostStarting}
+                hostIp={hostIp}
+                hostPort={HOST_PORT}
+                hostIpIsStale={hostIpIsStale}
+                agentsJoined={hostAgents.length}
+                onStartHosting={onStartHost}
+                onRetryIp={detectAndSetHostIp}
                 onScanned={(data) => {
                     setWsUrl(data)
                     Logger.infoToast('Scanned host address')
@@ -488,9 +486,9 @@ const HelixMeshScreen = () => {
             />
 
             <Text style={styles.help}>
-                No PC: one phone taps "Start hosting", the other loads a model and either scans the
-                host's QR code or types its IP:{HOST_PORT} into "Join as agent". Both on the same
-                Wi-Fi.{'\n\n'}
+                No PC: one phone taps "Start hosting", the other loads a model — either scans the
+                host's QR (tap the QR icon, top right) or types its IP:{HOST_PORT} into "Join as
+                agent". Both on the same Wi-Fi.{'\n\n'}
                 With a PC in the same Wi-Fi: {'\n'}
                 • L1 (drive the mesh): python -m helix.host.http_control --host 0.0.0.0{'\n'}
                 • L2 (use this phone as an agent): python -m helix.host.agent_host_ws_demo --host 0.0.0.0
@@ -520,7 +518,6 @@ const useStyles = () => {
             borderColor: color.primary._300,
         },
         result: { color: color.text._100 },
-        qrBox: { alignItems: 'center', rowGap: spacing.s },
         agentBox: {
             marginTop: spacing.xl2,
             paddingTop: spacing.l,
