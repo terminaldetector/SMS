@@ -249,6 +249,17 @@ export namespace Model {
         architecture: 'N/A',
     })
 
+    // Errors here arrive from three layers (JS, expo modules, native llama.cpp) and `String(e)`
+    // drops the detail on some of them, so pull out whatever each actually carries.
+    const stringifyError = (e: unknown) => {
+        if (!(e instanceof Error)) return String(e)
+        const parts = [e.message]
+        // Expo/JSI errors often carry the real reason on `cause` rather than in the message.
+        if (e.cause) parts.push(`cause: ${e.cause}`)
+        if (e.stack) parts.push(e.stack)
+        return parts.join('\n')
+    }
+
     // expo-sqlite reports native failures as "Call to function 'NativeStatement.runSync' has been
     // rejected. → Caused by: <the actual reason>" — and a toast truncates away the half that
     // matters. Surface the cause, and name the case users actually hit (re-importing a model).
@@ -302,10 +313,18 @@ export namespace Model {
                 loadable_path = (await getContentFd(loadable_path)) ?? loadable_path
 
             const modelInfo: any = await loadLlamaModelInfo(loadable_path)
+            // File size is cosmetic (it's only ever displayed). Statting can fail on its own —
+            // notably for a `content://` path, which is what `file_path` still holds for an
+            // externally linked model — and that must not sink an import whose GGUF already read
+            // fine above.
             let fileSize = 0
-            const fileResult = fileInfo(file_path)
-            if (fileResult.exists) {
-                fileSize = fileResult.size ?? 0
+            try {
+                const fileResult = fileInfo(file_path)
+                if (fileResult.exists) {
+                    fileSize = fileResult.size ?? 0
+                }
+            } catch (sizeError) {
+                Logger.warn(`Could not stat "${filename}" for its size: ${sizeError}`)
             }
             const modelType = modelInfo?.['general.architecture']
             const modelDataEntry = {
@@ -322,7 +341,12 @@ export namespace Model {
             await db.update(model_data).set(modelDataEntry).where(eq(model_data.id, id))
             return true
         } catch (e) {
-            Logger.errorToast(`Could not read "${filename}": ${describeError(e)}`)
+            // A toast truncates, and the interesting part of these errors is at the end — so the
+            // untruncated original also goes to the log, where it can be read and copied.
+            Logger.error(`Import failed for "${filename}" (${file_path}): ${stringifyError(e)}`)
+            // Reason first: the toast truncates, and a long filename would otherwise crowd out the
+            // only part that says what went wrong.
+            Logger.errorToast(`${describeError(e)} — ${filename}`)
             // Never leave the half-written 'N/A' row behind. It renders as a dead "Model Is
             // Invalid" card, and because `file` is UNIQUE it also blocks re-importing the same
             // model — the failure would then masquerade as a constraint error on every retry.
