@@ -228,36 +228,46 @@ class BitchatBleModule : Module() {
   // announce/join/RPC dial against it timed out ("Failed to load model info", etc.) even though the
   // BLE side connected fine.
   //
-  // ConnectivityManager reports the network this phone's own traffic is actually routed through, so
-  // asking for its Wi-Fi transport's address is the direct way to get the LAN one instead of
-  // guessing from interface order.
+  // allNetworks, not activeNetwork: Android picks exactly ONE network as "active" — whichever it
+  // currently prefers for internet-bound traffic — and that can be mobile data even while Wi-Fi is
+  // connected: a Wi-Fi network with no internet access (a bare router or a phone's own hotspot with
+  // no WAN — exactly the shape of a phone-to-phone test rig) or simply the OS's own routing choice
+  // with mobile data also on. That left this function reporting "no Wi-Fi" on a phone that was on
+  // Wi-Fi the entire time, which then fell through to fallbackInterfaceIpAddress() below — and that
+  // fallback has no way to tell a cellular interface from a Wi-Fi one either, so it could hand back
+  // a carrier IP nobody on the LAN can reach. Same mistake usbIpAddress() (above) was written to
+  // avoid from the start; this should have used allNetworks from the same pass.
   private fun wifiStationIpAddress(): String? = runCatching {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
       ?: return@runCatching null
-    val network = cm.activeNetwork ?: return@runCatching null
-    val caps = cm.getNetworkCapabilities(network) ?: return@runCatching null
-    // A phone that is only RUNNING its own hotspot (not joined to someone else's Wi-Fi) has no
-    // active network with TRANSPORT_WIFI here — tethering isn't a station connection — so this
-    // correctly falls through to fallbackInterfaceIpAddress() for that setup instead of finding
-    // nothing and reporting undetected.
-    if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return@runCatching null
-    cm.getLinkProperties(network)?.linkAddresses
-      ?.mapNotNull { it.address as? Inet4Address }
-      ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
-      ?.hostAddress
+    for (network in cm.allNetworks) {
+      val caps = cm.getNetworkCapabilities(network) ?: continue
+      // A phone that is only RUNNING its own hotspot (not joined to someone else's Wi-Fi) has no
+      // network with TRANSPORT_WIFI here — tethering isn't a station connection — so this correctly
+      // falls through to fallbackInterfaceIpAddress() for that setup instead of finding nothing.
+      if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+      val addr = cm.getLinkProperties(network)?.linkAddresses
+        ?.mapNotNull { it.address as? Inet4Address }
+        ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+        ?.hostAddress
+      if (addr != null) return@runCatching addr
+    }
+    null
   }.getOrNull()
 
-  // Only used when this phone has no Wi-Fi station connection to ask ConnectivityManager about
-  // (it's acting as its own hotspot, or Wi-Fi is off and only some other interface is up). AP/tether
-  // interfaces are still tried, just last: sorting them after everything else means a real
-  // wlan/eth station address wins whenever one exists, and one of these is only picked as a last
-  // resort.
+  // Only used when this phone has no Wi-Fi/USB station connection ConnectivityManager can name
+  // (it's acting as its own hotspot, or the radios are off and only some other interface is up).
+  // AP/tether and mobile-data interfaces are still tried, just last: sorting them after everything
+  // else means a real wlan/eth station address wins whenever one exists, and one of these is only
+  // picked as a genuine last resort — a mobile carrier IP is never reachable from another phone on
+  // the LAN, so silently handing one back here is exactly as wrong as the hotspot-subnet bug this
+  // module started from.
   private fun fallbackInterfaceIpAddress(): String {
-    val apLike = Regex("^(ap|softap|swlan)\\d*$", RegexOption.IGNORE_CASE)
+    val deprioritized = Regex("^(ap|softap|swlan|rmnet|ccmni|pdp|wwan|clat)\\d*$", RegexOption.IGNORE_CASE)
     return runCatching {
       NetworkInterface.getNetworkInterfaces().toList()
         .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
-        .sortedBy { if (apLike.matches(it.name)) 1 else 0 }
+        .sortedBy { if (deprioritized.matches(it.name)) 1 else 0 }
         .flatMap { it.inetAddresses.toList() }
         .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress }
         ?.hostAddress ?: ""
