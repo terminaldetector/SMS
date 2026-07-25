@@ -1,26 +1,19 @@
-apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
+// Matches how Expo SDK 55 modules declare themselves (see node_modules/expo-crypto/android).
+// `expo-module-gradle-plugin` supplies compileSdk/minSdk/targetSdk from the root project and wires
+// up expo-modules-core — hand-rolling those, as an older template does, leaves compileSdk unset and
+// the Android Gradle Plugin refuses to configure the project at all.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
 
 group = 'expo.modules.bitchatble'
 version = '0.1.0'
 
-def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
-apply from: expoModulesCorePlugin
-applyKotlinExpoModulesCorePlugin()
-useCoreDependencies()
-useExpoPublishing()
-
 android {
   namespace "expo.modules.bitchatble"
   defaultConfig {
-    // BLE peripheral mode (BluetoothLeAdvertiser) needs API 21+; the app's own minSdk is higher.
-    minSdkVersion 24
+    versionCode 1
+    versionName "0.1.0"
   }
-  lintOptions {
-    abortOnError false
-  }
-}
-
-dependencies {
-  implementation project(':expo-modules-core')
 }
