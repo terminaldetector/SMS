@@ -27,23 +27,32 @@ import { Theme } from '@lib/theme/ThemeManager'
 
 const HOST_KEY = 'helix-mesh-host'
 const WS_KEY = 'helix-agent-ws'
+const LAST_HOST_IP_KEY = 'helix-mesh-last-host-ip'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
 const HOST_PORT = 8790
 type HostMode = 'single' | 'voting'
 
-// Best-effort LAN IP for the host phone (so the other phone knows what to type). expo-network is an
-// Expo module (New-Architecture-safe); required lazily so it never touches startup.
+// Best-effort LAN IP for the host phone (so the QR/address the other phone needs is right there,
+// no hunting through Settings). expo-network is an Expo module (New-Architecture-safe); required
+// lazily so it never touches startup. One retry: right as the server starts, expo-network can read
+// a stale/empty value for a moment on some devices.
 async function getLanIp(): Promise<string> {
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const Net = require('expo-network')
-        const ip = await Net.getIpAddressAsync()
-        return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
-    } catch {
-        return ''
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Net = require('expo-network')
+    const read = async () => {
+        try {
+            const ip = await Net.getIpAddressAsync()
+            return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
+        } catch {
+            return ''
+        }
     }
+    const first = await read()
+    if (first) return first
+    await new Promise((r) => setTimeout(r, 400))
+    return read()
 }
 
 function normalizeWs(input: string): string {
@@ -82,6 +91,10 @@ const HelixMeshScreen = () => {
     const [hosting, setHosting] = useState(false)
     const [hostStarting, setHostStarting] = useState(false)
     const [hostIp, setHostIp] = useState('')
+    // True when hostIp came from a saved previous session, not this session's own detection — a
+    // phone's LAN IP is usually stable on the same Wi-Fi, but "usually" isn't "definitely", so the
+    // QR still shows (nothing to hunt for) with a note that it may be stale.
+    const [hostIpIsStale, setHostIpIsStale] = useState(false)
     const [hostAgents, setHostAgents] = useState<string[]>([])
     const [hostPrompt, setHostPrompt] = useState('')
     const [hostMode, setHostMode] = useState<HostMode>('single')
@@ -171,7 +184,19 @@ const HelixMeshScreen = () => {
             coordRef.current = coord
             setHosting(true)
             setHostAgents([])
-            setHostIp(await getLanIp())
+            const detected = await getLanIp()
+            if (detected) {
+                setHostIp(detected)
+                setHostIpIsStale(false)
+                mmkv.set(LAST_HOST_IP_KEY, detected)
+            } else {
+                // Detection can fail (permissions, timing, OEM quirks) even though the phone's IP
+                // hasn't actually changed since last time — showing last session's is still far
+                // better than sending the user to hunt for it in Settings.
+                const last = mmkv.getString(LAST_HOST_IP_KEY) ?? ''
+                setHostIp(last)
+                setHostIpIsStale(!!last)
+            }
             Logger.infoToast(`Hosting on :${HOST_PORT} — other phone joins this device`)
         } catch (e) {
             coordRef.current?.close()
@@ -352,11 +377,18 @@ const HelixMeshScreen = () => {
                                 <Text style={styles.dim}>
                                     Scan with the other phone's "Join as agent" → Scan QR
                                 </Text>
+                                {hostIpIsStale && (
+                                    <Text style={styles.dim}>
+                                        (address from last time — restart hosting once connected to
+                                        confirm it's still current)
+                                    </Text>
+                                )}
                             </View>
                         ) : (
                             <Text style={styles.dim}>
-                                Find this phone's Wi-Fi IP in Settings → Wi-Fi; the other phone joins
-                                that IP:{HOST_PORT}.
+                                Couldn't detect this phone's Wi-Fi IP. Open Settings → Wi-Fi to find
+                                it, then enter that IP:{HOST_PORT} on the other phone's "Join as
+                                agent".
                             </Text>
                         )}
                         <Text style={[styles.node, styles.gap]}>
