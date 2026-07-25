@@ -7,11 +7,14 @@ node_modules*
 public/
 
 # builds
-android
+# Anchored to the project root: these are the folders `expo prebuild` generates. Unanchored, they
+# also swallowed modules/*/android — the native source of local Expo modules, which IS ours to
+# commit and without which those modules silently vanish from the build.
+/android
+/ios
 eas.json
 *.apk
 .gradle
-ios
 
 # Expo
 .expo/
