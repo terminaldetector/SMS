@@ -108,6 +108,12 @@ const getPaths = (remote: boolean): ButtonData[] => [
         icon: 'share-alt',
     },
     {
+        name: 'BitChat Bridge',
+        path: '/screens/BitchatBridgeScreen',
+        // AntDesign (this drawer's icon set) has no bluetooth glyph; the mesh-node one fits.
+        icon: 'deployment-unit',
+    },
+    {
         name: 'Logs',
         path: '/screens/LogsScreen',
         icon: 'code',
