@@ -11,7 +11,8 @@
             "@public/*": ["public/*"],
             "@db": ["db/db"]
         },
-        "allowJs": true
+        "allowJs": true,
+        "allowImportingTsExtensions": true
     },
     "include": [
         "**/*.ts",
