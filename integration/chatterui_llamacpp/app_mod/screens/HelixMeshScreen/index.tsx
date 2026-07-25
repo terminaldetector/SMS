@@ -72,6 +72,9 @@ const HelixMeshScreen = () => {
     const [wsUrl, setWsUrl] = useMMKVString(WS_KEY)
     const [agentJoined, setAgentJoined] = useState(false)
     const [agentJoining, setAgentJoining] = useState(false)
+    // Distinct from agentJoined: the session stays joined across a Wi-Fi drop while the node
+    // reconnects, and the UI should say so rather than keep claiming "online".
+    const [agentOnline, setAgentOnline] = useState(false)
     const [showQrScanner, setShowQrScanner] = useState(false)
     const agentRef = useRef<HelixAgentNode | null>(null)
 
@@ -122,9 +125,11 @@ const HelixMeshScreen = () => {
             const node = new HelixAgentNode(agentId, AGENT_SECRET, runner, {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
             })
+            node.onStateChange = setAgentOnline
             await node.connect(url)
             agentRef.current = node
             setAgentJoined(true)
+            setAgentOnline(true)
             Logger.infoToast(`Joined mesh as agent ${agentId}`)
         } catch (e) {
             Logger.errorToast(`Join failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -137,8 +142,14 @@ const HelixMeshScreen = () => {
         agentRef.current?.close()
         agentRef.current = null
         setAgentJoined(false)
+        setAgentOnline(false)
         Logger.infoToast('Left the mesh')
     }
+
+    // Leaving the screen shouldn't strand a live agent connection.
+    useEffect(() => {
+        return () => agentRef.current?.close()
+    }, [])
 
     // Poll the coordinator's joined agents while hosting, and tear the server down on unmount.
     useEffect(() => {
@@ -427,7 +438,11 @@ const HelixMeshScreen = () => {
                     />
                 </View>
                 {agentJoined && (
-                    <Text style={styles.node}>● online as {agentId} — answering mesh tasks</Text>
+                    <Text style={styles.node}>
+                        {agentOnline
+                            ? `● online as ${agentId} — answering mesh tasks`
+                            : `◌ ${agentId} — connection lost, reconnecting…`}
+                    </Text>
                 )}
             </View>
 

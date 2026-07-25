@@ -84,7 +84,15 @@ export class HelixAgentNode {
     private card: AgentCard
     private ws: WebSocket | null = null
     private announceTimer: ReturnType<typeof setInterval> | null = null
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    private url = ''
+    private connected = false
+    private leaving = false
+    private retries = 0
     tasksServed = 0
+    // Fires on every connect/disconnect so the UI can show what the link is actually doing —
+    // otherwise a dropped Wi-Fi leaves the screen claiming "online" indefinitely.
+    onStateChange?: (connected: boolean) => void
 
     constructor(
         private readonly nodeId: string,
@@ -99,22 +107,72 @@ export class HelixAgentNode {
 
     private announceMs: number
 
+    isConnected() {
+        return this.connected
+    }
+
     // url: "ws://<coordinator-ip>:<port>"
     connect(url: string): Promise<void> {
+        this.url = url
+        this.leaving = false
+        this.retries = 0
+        return this.open()
+    }
+
+    private open(): Promise<void> {
         return new Promise((resolve, reject) => {
-            const ws = new WebSocket(url)
+            let settled = false
+            const settle = (err?: Error) => {
+                if (settled) return
+                settled = true
+                if (err) reject(err)
+                else resolve()
+            }
+            const ws = new WebSocket(this.url)
             ws.binaryType = 'arraybuffer'
             ws.onopen = () => {
+                this.retries = 0
+                this.connected = true
                 ws.send(enc.encode(this.nodeId)) // handshake: our id first
                 this.announceTimer = setInterval(() => this.announce(), this.announceMs)
                 this.announce()
-                resolve()
+                this.onStateChange?.(true)
+                settle()
             }
             ws.onmessage = (ev: MessageEvent) => this.onMessage(new Uint8Array(ev.data as ArrayBuffer))
-            ws.onerror = () => reject(new Error('websocket error'))
-            ws.onclose = () => this.close()
+            ws.onerror = () => settle(new Error('websocket error'))
+            ws.onclose = () => {
+                const wasConnected = this.connected
+                this.connected = false
+                this.stopAnnounce()
+                this.ws = null
+                if (wasConnected) this.onStateChange?.(false)
+                settle(new Error('websocket closed'))
+                // Only auto-retry a link that was working. A first connect that never opened is
+                // usually a wrong address, and quietly retrying it would hide that from the user.
+                if (wasConnected) this.scheduleReconnect()
+            }
             this.ws = ws
         })
+    }
+
+    // Exponential backoff, capped — a phone that walks out of Wi-Fi range rejoins on its own.
+    private scheduleReconnect() {
+        if (this.leaving || this.reconnectTimer) return
+        const delay = Math.min(1000 * 2 ** this.retries, 15000)
+        this.retries += 1
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null
+            if (this.leaving) return
+            this.open().catch(() => this.scheduleReconnect())
+        }, delay)
+    }
+
+    private stopAnnounce() {
+        if (this.announceTimer) {
+            clearInterval(this.announceTimer)
+            this.announceTimer = null
+        }
     }
 
     private send(frame: Uint8Array) {
@@ -153,11 +211,16 @@ export class HelixAgentNode {
         this.tasksServed += 1
     }
 
+    // Leave the mesh for good — stops announcing AND cancels any pending reconnect.
     close() {
-        if (this.announceTimer) {
-            clearInterval(this.announceTimer)
-            this.announceTimer = null
+        this.leaving = true
+        this.stopAnnounce()
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer)
+            this.reconnectTimer = null
         }
+        const wasConnected = this.connected
+        this.connected = false
         if (this.ws) {
             try {
                 this.ws.close()
@@ -166,5 +229,6 @@ export class HelixAgentNode {
             }
             this.ws = null
         }
+        if (wasConnected) this.onStateChange?.(false)
     }
 }

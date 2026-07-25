@@ -1,6 +1,6 @@
 import { copyFileSAF, getContentFd, persistContentPermission } from '@vali98/react-native-fs'
 import { loadLlamaModelInfo } from 'cui-llama.rn'
-import { eq, inArray, notInArray } from 'drizzle-orm'
+import { eq, inArray, notInArray, or } from 'drizzle-orm'
 import { getDocumentAsync } from 'expo-document-picker'
 import { Platform } from 'react-native'
 import { create } from 'zustand'
@@ -113,28 +113,47 @@ export namespace Model {
     }
 
     export const verifyModelList = async () => {
-        let modelList = await db.query.model_data.findMany()
         const fileList = await getModelList()
 
-        // cull missing models
-        if (Platform.OS === 'android')
+        // Cull missing models. Sequential on purpose: `forEach(async …)` does not await, so the
+        // refresh below used to race deletes that were still in flight.
+        if (Platform.OS === 'android') {
             // cull not required on iOS
-            modelList.forEach(async (item) => {
+            for (const item of await db.query.model_data.findMany()) {
                 if (item.name === '' || !getModelExists(item.file_path)) {
                     Logger.warnToast(`Model Missing, its entry will be deleted: ${item.name}`)
                     await db.delete(model_data).where(eq(model_data.id, item.id))
                 }
-            })
+            }
+        }
 
         // refresh as some may have been deleted
+        let modelList = await db.query.model_data.findMany()
+
+        // Retry entries whose metadata never loaded — they show up as "Model Is Invalid". Such a
+        // row does nothing except block re-importing that file (`file` is UNIQUE), so if it still
+        // won't parse, drop the row. The model file itself is left untouched.
+        const unreadable = new Set<string>()
+        for (const stale of modelList.filter(isInitialEntry)) {
+            Logger.info(`Revalidating invalid model entry: ${stale.file}`)
+            await db.delete(model_data).where(eq(model_data.id, stale.id))
+            if (!(await setModelDataInternal(stale.file, stale.file_path, false))) {
+                Logger.warnToast(`Removed unreadable model entry: ${stale.file}`)
+                unreadable.add(stale.file)
+            }
+        }
+
+        // refresh again as revalidation may have added or dropped rows
         modelList = await db.query.model_data.findMany()
 
         // create data as migration step
-        fileList.forEach(async (item) => {
-            if (modelList.some((model_data) => model_data.file === item) || !item) return
+        for (const item of fileList) {
+            if (modelList.some((model_data) => model_data.file === item) || !item) continue
+            // Just proved this one can't be read — don't immediately re-add it below.
+            if (unreadable.has(item)) continue
             Logger.info(`Creating Model Data for: ${item}`)
             await createModelData(item)
-        })
+        }
     }
 
     export const createModelData = async (filename: string, deleteOnFailure: boolean = false) => {
@@ -230,16 +249,51 @@ export namespace Model {
         architecture: 'N/A',
     })
 
+    // expo-sqlite reports native failures as "Call to function 'NativeStatement.runSync' has been
+    // rejected. → Caused by: <the actual reason>" — and a toast truncates away the half that
+    // matters. Surface the cause, and name the case users actually hit (re-importing a model).
+    const describeError = (e: unknown) => {
+        const raw = e instanceof Error ? e.message : String(e)
+        const cause = raw.split(/→\s*Caused by:\s*/).pop()?.trim() || raw
+        if (/UNIQUE constraint failed/i.test(cause)) return 'this model is already in the list'
+        return cause
+    }
+
+    // Other on-device runtimes' formats. llama.cpp reads GGUF only, so these can never load —
+    // say that plainly instead of letting the GGUF parser fail with something cryptic.
+    const foreignModelFormats = ['.litertlm', '.task', '.tflite', '.onnx', '.safetensors', '.pte']
+
+    const foreignFormatOf = (filename: string) =>
+        foreignModelFormats.find((ext) => filename.toLowerCase().endsWith(ext))
+
     const setModelDataInternal = async (
         filename: string,
         file_path: string,
         deleteOnFailure: boolean
     ) => {
+        let insertedId: number | undefined
         try {
+            const foreign = foreignFormatOf(filename)
+            if (foreign) {
+                Logger.errorToast(`${foreign} is not a GGUF model — ChatterUI runs GGUF files only`)
+                return false
+            }
+
+            // `file` and `file_path` are UNIQUE. Check up front so a duplicate import reports
+            // itself plainly instead of failing later as a raw native constraint violation.
+            const duplicate = await db.query.model_data.findFirst({
+                where: or(eq(model_data.file, filename), eq(model_data.file_path, file_path)),
+            })
+            if (duplicate) {
+                Logger.errorToast(`Already in the model list: ${filename}`)
+                return false
+            }
+
             const [{ id }] = await db
                 .insert(model_data)
                 .values(initialModelEntry(filename, file_path))
                 .returning({ id: model_data.id })
+            insertedId = id
 
             // This will load GGUF KV-pairs
             // refer to https://github.com/ggml-org/ggml/blob/master/docs/gguf.md#standardized-key-value-pairs
@@ -268,7 +322,17 @@ export namespace Model {
             await db.update(model_data).set(modelDataEntry).where(eq(model_data.id, id))
             return true
         } catch (e) {
-            Logger.errorToast(`Failed to create data: ${e}`)
+            Logger.errorToast(`Could not read "${filename}": ${describeError(e)}`)
+            // Never leave the half-written 'N/A' row behind. It renders as a dead "Model Is
+            // Invalid" card, and because `file` is UNIQUE it also blocks re-importing the same
+            // model — the failure would then masquerade as a constraint error on every retry.
+            if (insertedId !== undefined) {
+                try {
+                    await db.delete(model_data).where(eq(model_data.id, insertedId))
+                } catch (cleanupError) {
+                    Logger.warn(`Failed to roll back model entry: ${cleanupError}`)
+                }
+            }
             if (deleteOnFailure) deleteFile(file_path)
             return false
         }

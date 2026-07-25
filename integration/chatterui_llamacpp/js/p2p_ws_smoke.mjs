@@ -24,7 +24,8 @@ async function waitFor(fn, ms = 5000) {
 }
 
 async function main() {
-  const coord = new Coordinator('hosthone', SECRET)     // host phone (coordinator)
+  // Short agent timeout so the liveness check below runs in a second, not fifteen.
+  const coord = new Coordinator('hosthone', SECRET, { agentTimeoutMs: 400 }) // host phone
   const port = await coord.listen(0, '127.0.0.1')
   const agent = new WsAgentNode('hlxphone2', SECRET, makeUppercaseRunner('hlxphone2')) // other phone
   try {
@@ -36,6 +37,12 @@ async function main() {
 
     const voting = await coord.infer('vote no pc', 'voting')
     check(voting === 'VOTE NO PC', 'voting routed to the agent phone')
+
+    // Network drop: a phone that walks out of Wi-Fi range can leave the TCP connection half-open,
+    // so no 'close' event fires — only the missing announces reveal it. Simulate exactly that by
+    // silencing the agent while leaving its socket up; the host must still drop it.
+    clearInterval(agent._timer)
+    check(await waitFor(() => !coord.agents().includes('hlxphone2')), 'silent agent pruned after the announce timeout (half-open link)')
 
     console.log(`\nALL PASSED (${pass} checks) — two phones mesh directly, NO PC (host=WS server, agent=built-in WebSocket).`)
   } finally {
