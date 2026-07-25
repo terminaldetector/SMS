@@ -228,14 +228,17 @@ export class HandshakeState {
     // Plain fields, not parameter properties — see the note on CipherState.
     private readonly initiator: boolean
     private readonly s: { secret: Uint8Array; pub: Uint8Array }
+    private readonly rand: RandomBytes
 
     constructor(
         initiator: boolean,
         s: { secret: Uint8Array; pub: Uint8Array },
-        prologue: Uint8Array = new Uint8Array(0)
+        prologue: Uint8Array = new Uint8Array(0),
+        rand: RandomBytes = defaultRandomBytes
     ) {
         this.initiator = initiator
         this.s = s
+        this.rand = rand
         this.sym = new SymmetricState()
         this.sym.mixHash(prologue)
         // XX starts with no pre-messages, so nothing else is mixed in here.
@@ -243,7 +246,7 @@ export class HandshakeState {
 
     private ephemeral() {
         if (!this.e) {
-            const secret = x25519.utils.randomPrivateKey()
+            const secret = this.rand(32)
             this.e = { secret, pub: x25519.getPublicKey(secret) }
         }
         return this.e
@@ -339,7 +342,22 @@ export class HandshakeState {
     }
 }
 
-export function generateStaticKey(): { secret: Uint8Array; pub: Uint8Array } {
-    const secret = x25519.utils.randomPrivateKey()
+// React Native has no global crypto.getRandomValues, so @noble's own randomPrivateKey() throws
+// there. An x25519 private key is just 32 random bytes, so the caller injects the source instead —
+// on device that is expo-crypto, matching how helixAgent already does it. Defaulting to the global
+// keeps Node (the smoke tests) working unchanged.
+export type RandomBytes = (n: number) => Uint8Array
+
+export const defaultRandomBytes: RandomBytes = (n) => {
+    if (typeof crypto === 'undefined' || !crypto.getRandomValues)
+        throw new Error('no secure random source: pass randomBytes (expo-crypto on React Native)')
+    return crypto.getRandomValues(new Uint8Array(n))
+}
+
+export function generateStaticKey(rand: RandomBytes = defaultRandomBytes): {
+    secret: Uint8Array
+    pub: Uint8Array
+} {
+    const secret = rand(32)
     return { secret, pub: x25519.getPublicKey(secret) }
 }

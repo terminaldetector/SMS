@@ -27,6 +27,8 @@ import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -87,6 +89,23 @@ class BitchatBleModule : Module() {
 
     Function("isSupported") {
       context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) && adapter != null
+    }
+
+    // This phone's LAN address, for the QR connect code and the shard worker's announced endpoint.
+    // It lives in this module because it is the only native code we own, and because the obvious
+    // alternative does not work: expo-network reads WifiManager, which reports 0.0.0.0 on plenty of
+    // modern devices (restricted Wi-Fi info, tethering, or simply being on a hotspot). Enumerating
+    // the interfaces needs no permission and also finds the address when the phone IS the hotspot.
+    Function("getLocalIpAddress") {
+      runCatching {
+        NetworkInterface.getNetworkInterfaces().toList()
+          .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+          .flatMap { it.inetAddresses.toList() }
+          .firstOrNull { addr ->
+            addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress
+          }
+          ?.hostAddress ?: ""
+      }.getOrDefault("")
     }
 
     // Plenty of chipsets can scan but not advertise; the caller needs to know before promising a

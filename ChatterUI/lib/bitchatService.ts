@@ -15,6 +15,15 @@ import { Logger } from './state/Logger'
 import { mmkv } from './storage/MMKV'
 
 const KEY_STORAGE = 'bitchat-static-key'
+
+// React Native has no global crypto.getRandomValues, so every key and nonce here draws from
+// expo-crypto instead — the same New-Architecture-safe source helixAgent already uses. Without
+// this the bridge dies at startup with "crypto.getRandomValues must be defined".
+const randomBytes = (n: number): Uint8Array => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ExpoCrypto = require('expo-crypto')
+    return ExpoCrypto.getRandomValues(new Uint8Array(n))
+}
 const MAX_LOG_LINES = 50
 
 export interface BitchatPeer {
@@ -53,7 +62,7 @@ function loadStaticKey() {
             /* fall through and regenerate */
         }
     }
-    const key = generateStaticKey()
+    const key = generateStaticKey(randomBytes)
     mmkv.set(KEY_STORAGE, bytesToHex(key.secret))
     return key
 }
@@ -146,6 +155,7 @@ export const useBitchatStore = create<BitchatState>()((set, get) => {
                 const key = loadStaticKey()
                 bridge = new BitchatBridge(key, { send: (link, data) => ble.send(link, data) }, answerWithModel, {
                     nickname: 'helix',
+                    randomBytes,
                     onLog: log,
                 })
                 set({ myPeerId: hex(bridge.peerID) })

@@ -32,6 +32,12 @@ export interface BleSubscription {
 export interface BitchatBleModule {
     /** False when the device has no BLE at all. */
     isSupported(): boolean
+    /**
+     * This phone's IPv4 LAN address, or '' if it has none. Not BLE, but it lives here because this
+     * is the only native code the fork owns, and expo-network's WifiManager-based answer is
+     * 0.0.0.0 on plenty of modern devices (restricted Wi-Fi info, tethering, hotspot).
+     */
+    getLocalIpAddress(): string
     /** Plenty of chipsets scan but cannot advertise — check before promising to be reachable. */
     isPeripheralSupported(): boolean
     /** Whether the BLE runtime permissions are granted (Android 12+ wants SCAN/CONNECT/ADVERTISE). */

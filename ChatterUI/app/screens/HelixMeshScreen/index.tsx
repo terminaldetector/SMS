@@ -60,10 +60,26 @@ async function readLayerCount(modelPath: string): Promise<number> {
 }
 
 // Best-effort LAN IP for the host phone (so the QR/address the other phone needs is right there,
-// no hunting through Settings). expo-network is an Expo module (New-Architecture-safe); required
-// lazily so it never touches startup. One retry: right as the server starts, expo-network can read
-// a stale/empty value for a moment on some devices.
-async function getLanIp(): Promise<string> {
+// no hunting through Settings). Both sources are required lazily so nothing runs at app startup.
+//
+// Native first: expo-network asks WifiManager, which answers 0.0.0.0 on plenty of modern devices —
+// restricted Wi-Fi info, tethering, or the phone being the hotspot itself. That is what made QR
+// connect and the shard worker fail on a Redmi Turbo while working elsewhere. Enumerating the
+// network interfaces (bitchat-ble's getLocalIpAddress) needs no permission and sees the address in
+// all of those cases; expo-network stays as the fallback for a build without the native module.
+function nativeLanIp(): string {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const ip = require('../../../modules/bitchat-ble').BitchatBle?.getLocalIpAddress?.()
+        return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
+    } catch {
+        return ''
+    }
+}
+
+// One retry on the fallback path: right as the server starts, expo-network can read a stale/empty
+// value for a moment on some devices.
+async function expoNetworkLanIp(): Promise<string> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Net = require('expo-network')
     const read = async () => {
@@ -78,6 +94,10 @@ async function getLanIp(): Promise<string> {
     if (first) return first
     await new Promise((r) => setTimeout(r, 400))
     return read()
+}
+
+async function getLanIp(): Promise<string> {
+    return nativeLanIp() || (await expoNetworkLanIp())
 }
 
 function normalizeWs(input: string): string {
@@ -292,7 +312,11 @@ const HelixMeshScreen = () => {
             const { startRpcServer } = require('cui-llama.rn')
             const ok = await startRpcServer(`0.0.0.0:${RPC_PORT}`)
             if (!ok) {
-                Logger.errorToast(`Could not start the shard worker on :${RPC_PORT}`)
+                // The native side only answers false for two reasons: this build has no RPC
+                // backend compiled in, or the backend registry offered no local device to serve.
+                Logger.errorToast(
+                    `Could not start the shard worker on :${RPC_PORT} — this build has no RPC backend`
+                )
                 return
             }
             const addr = `${ip}:${RPC_PORT}`

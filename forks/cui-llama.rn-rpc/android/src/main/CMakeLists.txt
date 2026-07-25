@@ -100,6 +100,13 @@ function(build_rnllama_jni jni_name rnllama_name arch cpu_flags)
     if (RNLLAMA_BUILD_FROM_SOURCE)
         # Link to the shared library we just built in rnllama subdirectory
         target_link_libraries(${jni_name} PRIVATE ${rnllama_name})
+        # rnllama/CMakeLists.txt compiles ggml-rpc.cpp with -DLM_GGML_USE_RPC, but the JSI bindings
+        # that expose it (llamaStartRpcServer and the rpc_servers registration in
+        # cpp/jsi/RNLlamaJSI.cpp) are compiled HERE, in the JNI target. Without the same define they
+        # compile to their no-op #else branch: startRpcServer() resolves false with no message and
+        # rpc_servers is silently dropped, so a shard worker can never come up. Only when building
+        # from source — the prebuilt jniLibs in upstream releases have no RPC symbols to link to.
+        target_compile_options(${jni_name} PRIVATE -DLM_GGML_USE_RPC)
     else()
         # Link to prebuilt shared library from jniLibs
         # The prebuilt .so files will be loaded at runtime via System.loadLibrary()

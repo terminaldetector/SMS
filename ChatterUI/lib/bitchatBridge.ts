@@ -15,7 +15,7 @@ import type { BitchatPacket } from './bitchatCodec.ts'
 import { MsgType, NoisePayloadType, decodePacket, encodePacket } from './bitchatCodec.ts'
 import { FragmentAssembler, fragmentPacket } from './bitchatFragment.ts'
 import type { NoiseSession } from './bitchatNoise.ts'
-import { HandshakeState } from './bitchatNoise.ts'
+import { HandshakeState, defaultRandomBytes } from './bitchatNoise.ts'
 
 export const PEER_ID_LEN = 8
 export const DEFAULT_TTL = 7
@@ -169,7 +169,8 @@ export class BitchatBridge {
         this.peerID = peerIdFromPublicKey(staticKey.pub)
         this.nickname = opts.nickname ?? 'helix'
         this.chunkSize = opts.chunkSize ?? 469
-        this.rand = opts.randomBytes ?? ((n) => crypto.getRandomValues(new Uint8Array(n)))
+        // Same injected source the handshakes use — React Native has no global crypto.getRandomValues.
+        this.rand = opts.randomBytes ?? defaultRandomBytes
         this.onLog = opts.onLog
     }
 
@@ -209,7 +210,8 @@ export class BitchatBridge {
         const st = this.state(peer)
 
         // No handshake in flight means they opened one, so we answer as the responder.
-        if (!st.handshake) st.handshake = new HandshakeState(false, this.staticKey)
+        if (!st.handshake)
+            st.handshake = new HandshakeState(false, this.staticKey, undefined, this.rand)
 
         const hs = st.handshake
         let reply: Uint8Array | null = null
@@ -277,7 +279,7 @@ export class BitchatBridge {
         const peer = hex(peerID)
         const st = this.state(peer)
         if (st.session || st.handshake) return // already up or in flight
-        st.handshake = new HandshakeState(true, this.staticKey)
+        st.handshake = new HandshakeState(true, this.staticKey, undefined, this.rand)
         await this.sendPacket(link, MsgType.noiseHandshake, st.handshake.writeMessage(), peerID)
     }
 
