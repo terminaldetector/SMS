@@ -100,10 +100,27 @@ class BitchatBleModule : Module() {
     // It lives in this module because it is the only native code we own, and because the obvious
     // alternative does not work: expo-network reads WifiManager, which reports 0.0.0.0 on plenty of
     // modern devices (restricted Wi-Fi info, tethering, or simply being on a hotspot).
+    //
+    // USB wins when both are up: a cable is a deliberate choice by whoever plugged it in (a phone
+    // dock or hub scenario), and it gives HELIX/RPC a wired path with no Wi-Fi in the loop at all —
+    // same protocol, just a different physical link underneath.
     Function("getLocalIpAddress") {
-      val addr = wifiStationIpAddress() ?: fallbackInterfaceIpAddress()
+      val addr = usbIpAddress() ?: wifiStationIpAddress() ?: fallbackInterfaceIpAddress()
       Log.i(TAG, "getLocalIpAddress -> '$addr'")
       addr
+    }
+
+    // "usb" | "wifi" | "other" | "" — which link the address above actually came from. Exists
+    // because a silent wrong guess here is exactly what broke sharding before: 192.168.49.1 (the
+    // phone's own hotspot subnet) was logged as if it were a normal LAN address, with nothing to
+    // say it wasn't one.
+    Function("getLocalIpTransport") {
+      when {
+        usbIpAddress() != null -> "usb"
+        wifiStationIpAddress() != null -> "wifi"
+        fallbackInterfaceIpAddress().isNotEmpty() -> "other"
+        else -> ""
+      }
     }
 
     // Plenty of chipsets can scan but not advertise; the caller needs to know before promising a
@@ -168,6 +185,40 @@ class BitchatBleModule : Module() {
   }
 
   // --- LAN address -----------------------------------------------------------------------------
+
+  // USB tethering (Settings > Network > Hotspot & tethering > USB tethering — Android gives no API
+  // for a third-party app to flip this itself, so the UI has to ask for it explicitly) turns this
+  // phone into a normal network endpoint over the cable: whoever it's plugged into (a PC today; a
+  // small router/hub-brain doing the same job for several phones at once is the no-PC path, planned
+  // separately) sees it as just another interface and hands it an address like Wi-Fi would.
+  //
+  // allNetworks rather than activeNetwork: with Wi-Fi ALSO up, Android may keep Wi-Fi as the
+  // system's preferred default route and never surface the USB network as "active" — but it is
+  // still live and dialable, which is all HELIX/RPC need.
+  private fun usbIpAddress(): String? = runCatching {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      // TRANSPORT_USB exists from API 31; below that it's simply never set, so this loop finds
+      // nothing and falls through to the interface-name check rather than misreporting.
+      for (network in cm.allNetworks) {
+        val caps = cm.getNetworkCapabilities(network) ?: continue
+        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)) continue
+        val addr = cm.getLinkProperties(network)?.linkAddresses
+          ?.mapNotNull { it.address as? Inet4Address }
+          ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+          ?.hostAddress
+        if (addr != null) return@runCatching addr
+      }
+    }
+    // Pre-API-31, or an OEM build that never sets TRANSPORT_USB: Android's USB-tethering interface
+    // is named usb0/rndis0 across every device this has been checked against.
+    val usbLike = Regex("^(usb|rndis)\\d*$", RegexOption.IGNORE_CASE)
+    NetworkInterface.getNetworkInterfaces().toList()
+      .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) && usbLike.matches(it.name) }
+      .flatMap { it.inetAddresses.toList() }
+      .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress }
+      ?.hostAddress
+  }.getOrNull()
 
   // The address other phones on the SAME Wi-Fi (join, QR, shard worker) can actually reach. Blindly
   // enumerating interfaces used to pick whichever came first, which on a phone with its own hotspot

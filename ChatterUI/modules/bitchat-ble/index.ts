@@ -38,6 +38,13 @@ export interface BitchatBleModule {
      * 0.0.0.0 on plenty of modern devices (restricted Wi-Fi info, tethering, hotspot).
      */
     getLocalIpAddress(): string
+    /**
+     * Which link the address above came from: 'usb' (wired — a cable to a PC/hub, preferred
+     * whenever present), 'wifi' (a normal Wi-Fi station connection), 'other' (neither of the above
+     * matched anything specific), or '' (no address at all). Exists so the UI can say what it
+     * found instead of a bare IP a user has no way to sanity-check.
+     */
+    getLocalIpTransport(): string
     /** Plenty of chipsets scan but cannot advertise — check before promising to be reachable. */
     isPeripheralSupported(): boolean
     /** Whether the BLE runtime permissions are granted (Android 12+ wants SCAN/CONNECT/ADVERTISE). */

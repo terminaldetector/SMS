@@ -126,7 +126,7 @@ const HelixQrSheet: React.FC<HelixQrSheetProps> = ({
                                 <ActivityIndicator color={color.text._100} />
                             ) : (
                                 <Text style={{ color: color.text._400, textAlign: 'center' }}>
-                                    Couldn't detect this phone's Wi-Fi address.
+                                    Couldn't detect this phone's network address.
                                 </Text>
                             )}
                             <ThemedButton

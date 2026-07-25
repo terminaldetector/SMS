@@ -33,6 +33,7 @@ import { Theme } from '@lib/theme/ThemeManager'
 const HOST_KEY = 'helix-mesh-host'
 const WS_KEY = 'helix-agent-ws'
 const LAST_HOST_IP_KEY = 'helix-mesh-last-host-ip'
+const LAST_HOST_TRANSPORT_KEY = 'helix-mesh-last-host-ip-transport'
 // Whether a host offers its GGUF to joining phones, and whether a joining phone accepts it.
 // Default ON — the whole point is that the second phone doesn't need the file passed to it by hand.
 const MODEL_TRANSFER_KEY = 'helix-mesh-model-transfer'
@@ -65,6 +66,12 @@ async function readLayerCount(modelPath: string): Promise<number> {
     return Number(info?.[`${arch}.block_count`] ?? 0)
 }
 
+export interface DetectedIp {
+    ip: string
+    /** 'usb' | 'wifi' | 'other' | '' — which link it came from, for display next to the address. */
+    transport: string
+}
+
 // Best-effort LAN IP for the host phone (so the QR/address the other phone needs is right there,
 // no hunting through Settings). Both sources are required lazily so nothing runs at app startup.
 //
@@ -72,38 +79,51 @@ async function readLayerCount(modelPath: string): Promise<number> {
 // restricted Wi-Fi info, tethering, or the phone being the hotspot itself. That is what made QR
 // connect and the shard worker fail on a Redmi Turbo while working elsewhere. Enumerating the
 // network interfaces (bitchat-ble's getLocalIpAddress) needs no permission and sees the address in
-// all of those cases; expo-network stays as the fallback for a build without the native module.
-function nativeLanIp(): string {
+// all of those cases, INCLUDING a USB cable to a PC/hub — expo-network only ever sees Wi-Fi, so a
+// wired connection would otherwise report exactly like "no address at all". expo-network stays as
+// the fallback for a build without the native module.
+function nativeLanIp(): DetectedIp {
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const ip = require('../../../modules/bitchat-ble').BitchatBle?.getLocalIpAddress?.()
-        return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
+        const ble = require('../../../modules/bitchat-ble').BitchatBle
+        const ip = ble?.getLocalIpAddress?.()
+        if (typeof ip !== 'string' || ip === '0.0.0.0') return { ip: '', transport: '' }
+        const transport = ble?.getLocalIpTransport?.()
+        return { ip, transport: typeof transport === 'string' ? transport : '' }
     } catch {
-        return ''
+        return { ip: '', transport: '' }
     }
 }
 
 // One retry on the fallback path: right as the server starts, expo-network can read a stale/empty
 // value for a moment on some devices.
-async function expoNetworkLanIp(): Promise<string> {
+async function expoNetworkLanIp(): Promise<DetectedIp> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Net = require('expo-network')
-    const read = async () => {
+    const read = async (): Promise<DetectedIp> => {
         try {
             const ip = await Net.getIpAddressAsync()
-            return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
+            // expo-network reads WifiManager: whatever it finds is by definition a Wi-Fi address.
+            return typeof ip === 'string' && ip !== '0.0.0.0' ? { ip, transport: 'wifi' } : { ip: '', transport: '' }
         } catch {
-            return ''
+            return { ip: '', transport: '' }
         }
     }
     const first = await read()
-    if (first) return first
+    if (first.ip) return first
     await new Promise((r) => setTimeout(r, 400))
     return read()
 }
 
-async function getLanIp(): Promise<string> {
-    return nativeLanIp() || (await expoNetworkLanIp())
+async function getLanIp(): Promise<DetectedIp> {
+    const native = nativeLanIp()
+    return native.ip ? native : await expoNetworkLanIp()
+}
+
+function transportLabel(transport: string): string {
+    if (transport === 'usb') return ' (wired)'
+    if (transport === 'wifi') return ' (Wi-Fi)'
+    return ''
 }
 
 function normalizeWs(input: string): string {
@@ -149,6 +169,7 @@ const HelixMeshScreen = () => {
     const [hosting, setHosting] = useState(false)
     const [hostStarting, setHostStarting] = useState(false)
     const [hostIp, setHostIp] = useState('')
+    const [hostIpTransport, setHostIpTransport] = useState('')
     // True when hostIp came from a saved previous session, not this session's own detection — a
     // phone's LAN IP is usually stable on the same Wi-Fi, but "usually" isn't "definitely", so the
     // QR still shows (nothing to hunt for) with a note that it may be stale.
@@ -281,17 +302,20 @@ const HelixMeshScreen = () => {
 
     // Shared by the initial detect (onStartHost) and the manual "Retry" in the QR sheet.
     const detectAndSetHostIp = async () => {
-        const detected = await getLanIp()
-        if (detected) {
-            setHostIp(detected)
+        const { ip, transport } = await getLanIp()
+        if (ip) {
+            setHostIp(ip)
+            setHostIpTransport(transport)
             setHostIpIsStale(false)
-            mmkv.set(LAST_HOST_IP_KEY, detected)
+            mmkv.set(LAST_HOST_IP_KEY, ip)
+            mmkv.set(LAST_HOST_TRANSPORT_KEY, transport)
         } else {
             // Detection can fail (permissions, timing, OEM quirks) even though the phone's IP
             // hasn't actually changed since last time — showing last session's is still far
             // better than sending the user to hunt for it in Settings.
             const last = mmkv.getString(LAST_HOST_IP_KEY) ?? ''
             setHostIp(last)
+            setHostIpTransport(last ? (mmkv.getString(LAST_HOST_TRANSPORT_KEY) ?? '') : '')
             setHostIpIsStale(!!last)
         }
     }
@@ -368,9 +392,9 @@ const HelixMeshScreen = () => {
     // layers (address + RAM). There is no stop API for the server — once started it serves for the
     // process's lifetime — so this is a one-way switch, and the UI says so.
     const onShareCompute = async () => {
-        const ip = await getLanIp()
+        const { ip } = await getLanIp()
         if (!ip) {
-            Logger.errorToast("Couldn't detect this phone's Wi-Fi address — can't be a shard worker")
+            Logger.errorToast("Couldn't detect this phone's network address — can't be a shard worker")
             return
         }
         try {
@@ -408,7 +432,7 @@ const HelixMeshScreen = () => {
             return
         }
         if (!hostIp) {
-            Logger.errorToast("Couldn't detect this phone's Wi-Fi address — can't drive a shard")
+            Logger.errorToast("Couldn't detect this phone's network address — can't drive a shard")
             return
         }
         setShardStarting(true)
@@ -593,7 +617,9 @@ const HelixMeshScreen = () => {
                     <View style={styles.gap}>
                         <Text style={styles.node}>
                             ● hosting on port {HOST_PORT}
-                            {hostIp ? ` — other phone joins ${hostIp}:${HOST_PORT}` : ''}
+                            {hostIp
+                                ? ` — other phone joins ${hostIp}:${HOST_PORT}${transportLabel(hostIpTransport)}`
+                                : ''}
                         </Text>
                         <Text style={styles.dim}>
                             {!transferOn
