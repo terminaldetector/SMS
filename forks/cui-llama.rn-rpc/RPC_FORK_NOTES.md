@@ -58,6 +58,29 @@ symbol renamed to `lm_ggml_`/`LM_GGML_` to avoid clashing with other copies of g
   `LM_GGML_USE_RPC` isn't defined — the function is always registered, it just resolves to `false`
   there when it can't create a server.
 
+## Building this fork's `lib/` (and why there is no `prepare` script)
+
+ChatterUI depends on this directory via `file:`, so npm symlinks it — and Metro then resolves this
+package's imports from its *real* path. Anything in a local `node_modules/` here therefore wins over
+ChatterUI's, and installing this fork's devDependencies brings its own React Native (0.72) along.
+Bundling a second React Native is fatal: `cui-llama.rn` ends up calling `TurboModuleRegistry` on an
+instance the running app never initialised, so `TurboModuleRegistry.get('RNLlama')` returns null and
+every native call fails with "Cannot read property 'install' of null".
+
+So the order is: install devDeps → `npm run build` → **delete `node_modules` here**. That is what
+`.github/workflows/chatterui-apk.yml` does before it installs ChatterUI. Do the same by hand for a
+local build:
+
+```bash
+cd forks/cui-llama.rn-rpc && npm install --ignore-scripts && npm run build && rm -rf node_modules
+```
+
+A `"prepare": "bob build"` script would be the natural way to automate this, but it cannot work
+here: npm runs `prepare` for a `file:` dependency during ChatterUI's install, which is *after*
+`node_modules` has been removed — `bob` is gone by then and the install fails with `bob: not found`.
+Build `lib/` explicitly instead, as above. (`ChatterUI/metro.config.js` independently blocks this
+directory's `node_modules`, so a stray install cannot silently reintroduce the duplicate.)
+
 ## What's left (deferred)
 
 - Wired into ChatterUI now (`ChatterUI/package.json` → `file:../forks/cui-llama.rn-rpc`,
