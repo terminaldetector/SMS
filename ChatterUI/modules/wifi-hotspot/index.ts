@@ -37,6 +37,14 @@ export interface WifiHotspotModule {
     joinHotspot(ssid: string, passphrase: string): Promise<boolean>
     /** Undoes joinHotspot's process bind and releases the requested network. */
     leaveHotspot(): Promise<void>
+    /**
+     * This phone's OWN address on the network joinHotspot() bound it to, or '' if nothing is
+     * joined. Reads the exact network joinHotspot() holds a reference to, rather than scanning
+     * every Wi-Fi network the phone happens to have up — the regular Wi-Fi connection can stay
+     * live alongside the joined hotspot on plenty of hardware, so a generic scan cannot tell them
+     * apart. This is what a shard worker needs to announce the right RPC address.
+     */
+    getJoinedNetworkIp(): string
 }
 
 // Optional on purpose, same reasoning as bitchat-ble: an APK built before this module existed must

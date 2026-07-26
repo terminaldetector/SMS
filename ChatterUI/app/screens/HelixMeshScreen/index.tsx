@@ -112,6 +112,22 @@ export interface DetectedIp {
     transport: string
 }
 
+// This phone's own address on whatever it joined via the direct-hotspot path, or '' if it hasn't
+// joined one. Checked first, ahead of everything below: it reads the exact Network reference
+// wifi-hotspot's joinHotspot() bound to, so — unlike a generic Wi-Fi scan — it cannot be confused
+// by the phone's regular Wi-Fi connection staying up alongside the joined hotspot, which plenty of
+// hardware allows. A shard worker that joined this way and instead announced its ordinary Wi-Fi
+// address would hand the coordinator an address nobody on the hotspot subnet can dial.
+function hotspotJoinedIp(): string {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const ip = require('../../../modules/wifi-hotspot').WifiHotspot?.getJoinedNetworkIp?.()
+        return typeof ip === 'string' && ip !== '0.0.0.0' ? ip : ''
+    } catch {
+        return ''
+    }
+}
+
 // Best-effort LAN IP for the host phone (so the QR/address the other phone needs is right there,
 // no hunting through Settings). Both sources are required lazily so nothing runs at app startup.
 //
@@ -156,6 +172,8 @@ async function expoNetworkLanIp(): Promise<DetectedIp> {
 }
 
 async function getLanIp(): Promise<DetectedIp> {
+    const hotspotIp = hotspotJoinedIp()
+    if (hotspotIp) return { ip: hotspotIp, transport: 'hotspot' }
     const native = nativeLanIp()
     return native.ip ? native : await expoNetworkLanIp()
 }

@@ -118,6 +118,17 @@ class WifiHotspotModule : Module() {
       }
       promise.resolve(null)
     }
+
+    // This phone's OWN address on the network joinHotspot() bound it to, or '' if nothing is
+    // joined. Reads LinkProperties off the exact Network reference joinHotspot() already holds —
+    // not a scan of every Wi-Fi-transport network on the device, which would be ambiguous the
+    // moment a phone keeps its regular Wi-Fi connection up alongside the joined hotspot (Android
+    // permits both at once on much hardware, and nothing then says which one a generic scan would
+    // return first). This is what makes a shard worker's announced RPC address correct when it
+    // joined over this path instead of ordinary Wi-Fi.
+    Function("getJoinedNetworkIp") {
+      joinedNetworkIp()
+    }
   }
 
   private fun granted(permission: String) =
@@ -291,5 +302,20 @@ class WifiHotspotModule : Module() {
     }
     joinCallback = null
     joinedNetwork = null
+  }
+
+  // Empty even after a real join is one legitimate case: joinHotspotLegacy() (pre-API-29) has no
+  // Network reference to read at all — the classic addNetwork/enableNetwork API predates
+  // ConnectivityManager's per-network model. That is harmless there specifically because that API
+  // also cannot hold two Wi-Fi connections at once, so the generic Wi-Fi scan this falls back to
+  // has only one real candidate to find anyway.
+  private fun joinedNetworkIp(): String {
+    val network = joinedNetwork ?: return ""
+    return runCatching {
+      connectivityManager.getLinkProperties(network)?.linkAddresses
+        ?.mapNotNull { it.address as? Inet4Address }
+        ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+        ?.hostAddress
+    }.getOrNull() ?: ""
   }
 }
