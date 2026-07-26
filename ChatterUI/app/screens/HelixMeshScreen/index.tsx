@@ -9,7 +9,16 @@
 import { AntDesign } from '@expo/vector-icons'
 import * as ExpoCrypto from 'expo-crypto'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import {
+    ActivityIndicator,
+    PermissionsAndroid,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native'
 import { useMMKVBoolean, useMMKVString } from 'react-native-mmkv'
 
 import ThemedButton from '@components/buttons/ThemedButton'
@@ -23,6 +32,7 @@ import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
+import { encodeHotspotQuery, parseScannedAddress } from '@lib/helixHotspot'
 import { httpBaseFromHost, servedModelFromFile, syncModelFromHost } from '@lib/helixModelSync'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
 import { Model } from '@lib/engine/Local/Model'
@@ -37,6 +47,11 @@ const LAST_HOST_TRANSPORT_KEY = 'helix-mesh-last-host-ip-transport'
 // Whether a host offers its GGUF to joining phones, and whether a joining phone accepts it.
 // Default ON — the whole point is that the second phone doesn't need the file passed to it by hand.
 const MODEL_TRANSFER_KEY = 'helix-mesh-model-transfer'
+// Whether "Start hosting" runs its own Wi-Fi hotspot instead of using whatever network this phone
+// is already on — the SHAREit-style path: full Wi-Fi speed, no shared router required at all.
+// Default OFF: unlike everything else on this screen, the native side of this one has not yet been
+// through a real-device test pass, so it should not turn on for anyone who hasn't chosen it.
+const USE_HOTSPOT_KEY = 'helix-mesh-use-hotspot'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
@@ -53,6 +68,31 @@ function deviceTotalMemory(): number {
         return Number(require('expo-device').totalMemory ?? 0)
     } catch {
         return 0
+    }
+}
+
+// Lazily required so an APK without the module fails with a clear message rather than at import
+// time — same reasoning as bitchatService.ts's nativeBle().
+function wifiHotspotModule() {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('../../../modules/wifi-hotspot').WifiHotspot
+}
+
+// WifiManager.startLocalOnlyHotspot() requires ACCESS_FINE_LOCATION on every Android version, with
+// no BLE-style exemption — this is the one runtime prompt Android does not let this feature skip.
+async function requestHotspotPermission(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true
+    try {
+        const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION, {
+            title: 'Location permission',
+            message:
+                'Android requires this to start a direct Wi-Fi hotspot between phones, even though ' +
+                'the app has no use for your location.',
+            buttonPositive: 'OK',
+        })
+        return result === PermissionsAndroid.RESULTS.GRANTED
+    } catch {
+        return false
     }
 }
 
@@ -123,6 +163,7 @@ async function getLanIp(): Promise<DetectedIp> {
 function transportLabel(transport: string): string {
     if (transport === 'usb') return ' (wired)'
     if (transport === 'wifi') return ' (Wi-Fi)'
+    if (transport === 'hotspot') return ' (direct Wi-Fi hotspot)'
     return ''
 }
 
@@ -157,6 +198,10 @@ const HelixMeshScreen = () => {
     const [agentOnline, setAgentOnline] = useState(false)
     const [showQrSheet, setShowQrSheet] = useState(false)
     const agentRef = useRef<HelixAgentNode | null>(null)
+    // True once THIS join went through a direct Wi-Fi hotspot — leaving the mesh should also
+    // release that network, or the phone stays bound to it (and off its normal Wi-Fi/mobile data)
+    // even after the host stops hosting.
+    const joinedHotspotRef = useRef(false)
 
     // Model transfer: the host serves its GGUF on the same port, the joining phone pulls it if it
     // doesn't already have that exact file. useMMKVBoolean returns undefined until it's been set,
@@ -180,6 +225,13 @@ const HelixMeshScreen = () => {
     const [hostRunning, setHostRunning] = useState(false)
     const [hostResult, setHostResult] = useState('')
     const coordRef = useRef<HelixCoordinator | null>(null)
+
+    // Direct Wi-Fi hotspot ("fast connect"): the query string this session's QR appends after
+    // ws://host:port, and whether hosting actually has a hotspot running that needs stopping.
+    const [useHotspot, setUseHotspot] = useMMKVBoolean(USE_HOTSPOT_KEY)
+    const hotspotOn = !!useHotspot
+    const [hostQrExtra, setHostQrExtra] = useState('')
+    const hotspotActiveRef = useRef(false)
 
     // Level 3 sharding: one big model split across phones by llama.cpp RPC.
     // Non-empty once this phone's rpc-server is up: its announced "host:port". Doubles as the
@@ -285,12 +337,25 @@ const HelixMeshScreen = () => {
         agentRef.current = null
         setAgentJoined(false)
         setAgentOnline(false)
+        if (joinedHotspotRef.current) {
+            joinedHotspotRef.current = false
+            const hotspot = wifiHotspotModule()
+            if (hotspot) void hotspot.leaveHotspot().catch(() => {})
+        }
         Logger.infoToast('Left the mesh')
     }
 
-    // Leaving the screen shouldn't strand a live agent connection.
+    // Leaving the screen shouldn't strand a live agent connection, or leave this phone bound to a
+    // hotspot network it can no longer see or control from anywhere.
     useEffect(() => {
-        return () => agentRef.current?.close()
+        return () => {
+            agentRef.current?.close()
+            if (joinedHotspotRef.current) {
+                joinedHotspotRef.current = false
+                const hotspot = wifiHotspotModule()
+                if (hotspot) void hotspot.leaveHotspot().catch(() => {})
+            }
+        }
     }, [])
 
     // Poll the coordinator's joined agents while hosting, and tear the server down on unmount.
@@ -300,7 +365,14 @@ const HelixMeshScreen = () => {
         return () => clearInterval(t)
     }, [hosting])
     useEffect(() => {
-        return () => coordRef.current?.close()
+        return () => {
+            coordRef.current?.close()
+            if (hotspotActiveRef.current) {
+                hotspotActiveRef.current = false
+                const hotspot = wifiHotspotModule()
+                if (hotspot) void hotspot.stopHotspot().catch(() => {})
+            }
+        }
     }, [])
 
     // Shared by the initial detect (onStartHost) and the manual "Retry" in the QR sheet.
@@ -339,9 +411,38 @@ const HelixMeshScreen = () => {
         if (coordRef.current && hosting) offerLoadedModel(coordRef.current, transferOn)
     }, [transferOn, hosting])
 
+    const stopHotspotIfActive = () => {
+        if (!hotspotActiveRef.current) return
+        hotspotActiveRef.current = false
+        setHostQrExtra('')
+        const hotspot = wifiHotspotModule()
+        if (hotspot) void hotspot.stopHotspot().catch(() => {})
+    }
+
     const onStartHost = async () => {
         setHostStarting(true)
+        let hotspotStarted = false
         try {
+            if (hotspotOn) {
+                const hotspot = wifiHotspotModule()
+                if (!hotspot) throw new Error('Wi-Fi hotspot is not in this build')
+                if (!hotspot.isSupported()) {
+                    throw new Error('This device has no Wi-Fi hotspot API (needs Android 8+)')
+                }
+                if (!(await requestHotspotPermission())) {
+                    throw new Error('Location permission is needed to start a direct Wi-Fi hotspot')
+                }
+                // Android requires this permission for the hotspot itself, not because the app has
+                // any use for location — see requestHotspotPermission()'s prompt copy.
+                const creds = await hotspot.startHotspot()
+                hotspotStarted = true
+                hotspotActiveRef.current = true
+                setHostIp(creds.ip)
+                setHostIpTransport('hotspot')
+                setHostIpIsStale(false)
+                setHostQrExtra(encodeHotspotQuery(creds))
+            }
+
             const coord = new HelixCoordinator(`host-${agentId}`, AGENT_SECRET, {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
             })
@@ -350,11 +451,19 @@ const HelixMeshScreen = () => {
             offerLoadedModel(coord, transferOn)
             setHosting(true)
             setHostAgents([])
-            await detectAndSetHostIp()
-            Logger.infoToast(`Hosting on :${HOST_PORT} — other phone joins this device`)
+            if (!hotspotOn) {
+                setHostQrExtra('')
+                await detectAndSetHostIp()
+            }
+            Logger.infoToast(
+                hotspotOn
+                    ? `Hosting a direct Wi-Fi hotspot on :${HOST_PORT} — scan to join, no router needed`
+                    : `Hosting on :${HOST_PORT} — other phone joins this device`
+            )
         } catch (e) {
             coordRef.current?.close()
             coordRef.current = null
+            if (hotspotStarted) stopHotspotIfActive()
             Logger.errorToast(`Host start failed: ${e instanceof Error ? e.message : String(e)}`)
         } finally {
             setHostStarting(false)
@@ -366,6 +475,7 @@ const HelixMeshScreen = () => {
         coordRef.current = null
         setHosting(false)
         setHostAgents([])
+        stopHotspotIfActive()
         Logger.infoToast('Stopped hosting')
     }
 
@@ -610,6 +720,19 @@ const HelixMeshScreen = () => {
                     value={transferOn}
                     onChangeValue={setModelTransfer}
                 />
+                <ThemedSwitch
+                    label="Direct Wi-Fi hotspot (fastest, no router needed)"
+                    description={
+                        "This phone runs its own Wi-Fi network instead of using whatever it's already " +
+                        'on — full Wi-Fi speed with nothing shared between phones required, like a ' +
+                        'file-transfer app. Needs a one-time Location permission (Android requires it ' +
+                        'for this specific API, not because the app uses your location). Off by ' +
+                        'default: newer than the rest of this screen, so worth trying deliberately. ' +
+                        'Takes effect on the next "Start hosting", not on an already-running session.'
+                    }
+                    value={hotspotOn}
+                    onChangeValue={setUseHotspot}
+                />
                 <ThemedButton
                     label={hostStarting ? 'Starting…' : hosting ? 'Stop hosting' : 'Start hosting'}
                     variant={hosting ? 'critical' : 'primary'}
@@ -776,15 +899,41 @@ const HelixMeshScreen = () => {
                 hostIp={hostIp}
                 hostPort={HOST_PORT}
                 hostIpIsStale={hostIpIsStale}
+                hostQrExtra={hostQrExtra}
                 agentsJoined={hostAgents.length}
                 onStartHosting={onStartHost}
                 onRetryIp={detectAndSetHostIp}
                 onScanned={(data) => {
-                    setWsUrl(data)
+                    const { base, hotspot } = parseScannedAddress(data)
+                    setWsUrl(base)
                     // Scanning IS the connect action — asking for a second, separate tap on "Join
                     // as agent" after this is exactly the friction a QR code exists to remove.
                     if (agentJoined) onLeaveAgent()
-                    void onJoinAgent(data)
+                    void (async () => {
+                        if (hotspot) {
+                            const wifiHotspot = wifiHotspotModule()
+                            if (!wifiHotspot) {
+                                Logger.errorToast(
+                                    "This code needs a direct Wi-Fi hotspot, which isn't in this build"
+                                )
+                                return
+                            }
+                            Logger.infoToast("Joining the host's Wi-Fi hotspot…")
+                            try {
+                                if (!(await wifiHotspot.joinHotspot(hotspot.ssid, hotspot.passphrase))) {
+                                    Logger.errorToast("Could not join the host's Wi-Fi hotspot")
+                                    return
+                                }
+                                joinedHotspotRef.current = true
+                            } catch (e) {
+                                Logger.errorToast(
+                                    `Could not join the host's Wi-Fi hotspot: ${e instanceof Error ? e.message : String(e)}`
+                                )
+                                return
+                            }
+                        }
+                        await onJoinAgent(base)
+                    })()
                 }}
             />
 

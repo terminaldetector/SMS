@@ -6,7 +6,12 @@
          ones for location they do not need. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- No maxSdkVersion here (unlike BLUETOOTH/BLUETOOTH_ADMIN above): the wifi-hotspot module
+         also declares this permission, unconditionally, because WifiManager.startLocalOnlyHotspot()
+         needs it on every API level with no BLE-style exemption. Two manifests requesting the same
+         permission with DIFFERENT maxSdkVersion values is a manifest-merge conflict, so both request
+         it the same way — harmless for BLE, which only ever needed it pre-31 anyway. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- getLocalIpAddress() asks ConnectivityManager which network this phone is actually routed
          through, so it reports the real Wi-Fi LAN address instead of guessing from interface

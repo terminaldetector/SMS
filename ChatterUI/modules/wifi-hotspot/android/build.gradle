@@ -1,0 +1,19 @@
+// Matches how Expo SDK 55 modules declare themselves (see node_modules/expo-crypto/android).
+// `expo-module-gradle-plugin` supplies compileSdk/minSdk/targetSdk from the root project and wires
+// up expo-modules-core — hand-rolling those, as an older template does, leaves compileSdk unset and
+// the Android Gradle Plugin refuses to configure the project at all.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.wifihotspot'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.wifihotspot"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}

@@ -23,6 +23,8 @@ interface HelixQrSheetProps {
     hostIp: string
     hostPort: number
     hostIpIsStale: boolean
+    /** Appended after ws://host:port — carries hotspot ssid/passphrase when that mode is on, else ''. */
+    hostQrExtra: string
     agentsJoined: number
     onStartHosting: () => void
     onRetryIp: () => Promise<void>
@@ -37,6 +39,7 @@ const HelixQrSheet: React.FC<HelixQrSheetProps> = ({
     hostIp,
     hostPort,
     hostIpIsStale,
+    hostQrExtra,
     agentsJoined,
     onStartHosting,
     onRetryIp,
@@ -101,13 +104,15 @@ const HelixQrSheet: React.FC<HelixQrSheetProps> = ({
                     {hosting && hostIp ? (
                         <>
                             <View style={{ backgroundColor: 'white', padding: spacing.l, borderRadius: spacing.m }}>
-                                <QRCode value={`ws://${hostIp}:${hostPort}`} size={200} />
+                                <QRCode value={`ws://${hostIp}:${hostPort}${hostQrExtra}`} size={200} />
                             </View>
                             <Text style={{ color: color.text._100, fontSize: fontSize.l }}>
                                 {hostIp}:{hostPort}
                             </Text>
                             <Text style={{ color: color.text._400, textAlign: 'center' }}>
-                                Scan this with the other phone's Scan tab to join as an agent.
+                                {hostQrExtra
+                                    ? "Scan this with the other phone's Scan tab — it joins this phone's direct Wi-Fi hotspot and the mesh in one step, no shared network needed."
+                                    : "Scan this with the other phone's Scan tab to join as an agent."}
                             </Text>
                             {hostIpIsStale && (
                                 <Text style={{ color: color.text._400, textAlign: 'center' }}>

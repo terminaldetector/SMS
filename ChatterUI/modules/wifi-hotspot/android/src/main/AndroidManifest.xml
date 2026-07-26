@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- WifiManager.startLocalOnlyHotspot() requires this on the HOST device, on every API level —
+         unlike BLE scanning, there is no "neverForLocation" equivalent that exempts it. The joining
+         device does NOT need this: WifiNetworkSpecifier (the modern join path, API 29+) was built
+         specifically so a per-connection Wi-Fi join needs no location permission at all. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Only exercised by the pre-API-29 join fallback (WifiConfiguration + addNetwork); the
+         WifiNetworkSpecifier path used on modern Android needs no Wi-Fi-state-changing permission. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+</manifest>

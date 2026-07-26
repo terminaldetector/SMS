@@ -65,6 +65,7 @@ jobs:
           for s in conformance conformance_noble control_smoke http_smoke agent_smoke \
                    l2_host_smoke l2_ws_smoke p2p_ws_smoke rpc_smoke shard_plan_smoke \
                    shard_smoke heal_smoke bitchat_codec_smoke bitchat_noise_smoke \
-                   bitchat_fragment_smoke bitchat_bridge_smoke model_transfer_smoke; do
+                   bitchat_fragment_smoke bitchat_bridge_smoke model_transfer_smoke \
+                   hotspot_qr_smoke; do
             echo "== $s.mjs =="; node "integration/chatterui_llamacpp/js/$s.mjs"
           done
