@@ -23,7 +23,6 @@ import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saturnmask.gallery.AppLifecycleProvider
-import com.saturnmask.gallery.BuildConfig
 import com.saturnmask.gallery.common.ProjectConfig
 import com.saturnmask.gallery.common.SystemPromptHelper
 import com.saturnmask.gallery.common.getJsonResponse
@@ -83,6 +82,16 @@ private const val MODEL_ALLOWLIST_FILENAME = "model_allowlist.json"
 private const val MODEL_ALLOWLIST_TEST_FILENAME = "model_allowlist_test.json"
 private const val ALLOWLIST_BASE_URL =
   "https://raw.githubusercontent.com/google-ai-edge/gallery/refs/heads/main/model_allowlists"
+
+// This fork's own versionName (see app/build.gradle.kts) has diverged from upstream
+// google-ai-edge/gallery's release numbering, so it no longer names a file that actually exists in
+// their model_allowlists/ directory — confirmed live: the newest file upstream actually serves is
+// 1_0_15.json (checked via the GitHub contents API; nothing newer exists as of Round 19). Using our
+// own versionName here 404s on every fetch, silently falling back to whatever's cached on disk —
+// which means a genuinely fresh install with no cached copy gets zero models. Pin to the latest
+// upstream file confirmed to exist instead. Bump this only after re-confirming a newer file is
+// actually present upstream (re-check model_allowlists/ before bumping, don't guess).
+private const val LATEST_KNOWN_UPSTREAM_ALLOWLIST_VERSION = "1_0_15"
 
 private const val TEST_MODEL_ALLOW_LIST = ""
 
@@ -895,9 +904,9 @@ constructor(
         }
 
         if (modelAllowlist == null) {
-          // Load from github.
-          var version = BuildConfig.VERSION_NAME.replace(".", "_")
-          val url = getAllowlistUrl(version)
+          // Load from github. See LATEST_KNOWN_UPSTREAM_ALLOWLIST_VERSION's doc comment — this
+          // fork's own versionName doesn't name a file that exists upstream.
+          val url = getAllowlistUrl(LATEST_KNOWN_UPSTREAM_ALLOWLIST_VERSION)
           Log.d(TAG, "Loading model allowlist from internet. Url: $url")
           val data = getJsonResponse<ModelAllowlist>(url = url)
           modelAllowlist = data?.jsonObj

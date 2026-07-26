@@ -127,7 +127,13 @@ data class AllowedModel(
     // "gpu,cpu" only; don't "fix" this based on marketing claims without re-checking that table.
     // Tracked upstream at google-ai-edge/LiteRT-LM#1915 — it's a missing support row, not a
     // fallback bug; re-check that issue/the table above before ever touching this, don't file a
-    // duplicate.
+    // duplicate. Re-verified Round 19 (issue still open, this app's actual model-allowlist JSON —
+    // fetched from google-ai-edge/gallery/model_allowlists/, newest is 1_0_15.json — still declares
+    // Gemma-4 entries "gpu,cpu" only, zero mentions of npu/tpu/Tensor anywhere in it). Google DID
+    // separately announce "Gemma 4 E2B for TPU" on Pixel 10 in mid-July 2026, but that ships through
+    // AICore — a different, system-level model-serving path this app doesn't integrate with — not
+    // through this app's HuggingFace-download + allowlist pipeline. Don't wire NPU/TPU in here based
+    // on that announcement alone; it doesn't change what this specific pipeline actually offers.
 
     if (isLlmModel) {
       val defaultTopK: Int = defaultConfig.topK ?: DEFAULT_TOPK
