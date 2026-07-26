@@ -33,7 +33,7 @@ import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
-import { encodeHotspotQuery, parseScannedAddress } from '@lib/helixHotspot'
+import { encodeHotspotQuery, parseScannedAddress, withHost } from '@lib/helixHotspot'
 import { httpBaseFromHost, servedModelFromFile, syncModelFromHost } from '@lib/helixModelSync'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
 import { Model } from '@lib/engine/Local/Model'
@@ -414,12 +414,25 @@ const HelixMeshScreen = () => {
     // Shared by the initial detect (onStartHost) and the manual "Retry" in the QR sheet.
     const detectAndSetHostIp = async () => {
         const { ip, transport } = await getLanIp()
+        if (ip && hotspotActiveRef.current) {
+            // While this phone is serving its own hotspot, the label is known and the persisted
+            // "last known address" below must never be used: it belongs to some other network from
+            // a previous session and would confidently point joining phones at nothing.
+            setHostIp(ip)
+            setHostIpTransport('hotspot')
+            setHostIpIsStale(false)
+            return
+        }
         if (ip) {
             setHostIp(ip)
             setHostIpTransport(transport)
             setHostIpIsStale(false)
             mmkv.set(LAST_HOST_IP_KEY, ip)
             mmkv.set(LAST_HOST_TRANSPORT_KEY, transport)
+        } else if (hotspotActiveRef.current) {
+            setHostIp('')
+            setHostIpTransport('hotspot')
+            setHostIpIsStale(false)
         } else {
             // Detection can fail (permissions, timing, OEM quirks) even though the phone's IP
             // hasn't actually changed since last time — showing last session's is still far
@@ -473,10 +486,21 @@ const HelixMeshScreen = () => {
                 const creds = await hotspot.startHotspot()
                 hotspotStarted = true
                 hotspotActiveRef.current = true
-                setHostIp(creds.ip)
+                // The native side now returns '' rather than guessing when the AP interface has no
+                // address yet — falling back to ordinary detection here beats advertising a
+                // constant that may not be this device's actual hotspot address. Getting this
+                // wrong is invisible until a phone tries to join and silently can't reach anything.
+                const hotspotIp = creds.ip || (await getLanIp()).ip
+                setHostIp(hotspotIp)
                 setHostIpTransport('hotspot')
                 setHostIpIsStale(false)
                 setHostQrExtra(encodeHotspotQuery(creds))
+                if (!hotspotIp) {
+                    Logger.warnToast(
+                        "Hotspot is up but its address couldn't be read — the other phone can still " +
+                            'join by scanning, which uses the gateway instead'
+                    )
+                }
             }
 
             const coord = new HelixCoordinator(`host-${agentId}`, AGENT_SECRET, {
@@ -951,6 +975,7 @@ const HelixMeshScreen = () => {
                     // as agent" after this is exactly the friction a QR code exists to remove.
                     if (agentJoined) onLeaveAgent()
                     void (async () => {
+                        let target = base
                         if (hotspot) {
                             const wifiHotspot = wifiHotspotModule()
                             if (!wifiHotspot) {
@@ -966,6 +991,21 @@ const HelixMeshScreen = () => {
                                     return
                                 }
                                 joinedHotspotRef.current = true
+                                // Trust the network over the QR code. The gateway of a hotspot IS
+                                // the phone serving it, read from the DHCP lease we just took,
+                                // whereas the address in the code is only what the host BELIEVED
+                                // its own address to be — and a host that gets that wrong produces
+                                // a code that joins the Wi-Fi fine and then fails every dial.
+                                const gateway = wifiHotspot.getJoinedNetworkGateway?.() ?? ''
+                                if (gateway) {
+                                    target = withHost(base, gateway)
+                                    if (target !== base) {
+                                        setWsUrl(target)
+                                        Logger.info(
+                                            `Host advertised ${base}, but the hotspot gateway is ${gateway} — using the gateway`
+                                        )
+                                    }
+                                }
                             } catch (e) {
                                 Logger.errorToast(
                                     `Could not join the host's Wi-Fi hotspot: ${e instanceof Error ? e.message : String(e)}`
@@ -973,7 +1013,7 @@ const HelixMeshScreen = () => {
                                 return
                             }
                         }
-                        await onJoinAgent(base)
+                        await onJoinAgent(target)
                     })()
                 }}
             />

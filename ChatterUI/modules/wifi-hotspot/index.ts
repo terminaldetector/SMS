@@ -45,6 +45,13 @@ export interface WifiHotspotModule {
      * apart. This is what a shard worker needs to announce the right RPC address.
      */
     getJoinedNetworkIp(): string
+    /**
+     * The address serving the joined hotspot — i.e. the host phone itself, read from the DHCP
+     * lease this phone just took. Authoritative in a way the scanned QR is not: the host has to
+     * work out its own address to put in that code and can get it wrong. '' if not joined, or on
+     * a build/API level that cannot report it.
+     */
+    getJoinedNetworkGateway(): string
 }
 
 // Optional on purpose, same reasoning as bitchat-ble: an APK built before this module existed must

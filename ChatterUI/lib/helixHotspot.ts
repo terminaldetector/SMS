@@ -50,3 +50,28 @@ export function parseScannedAddress(data: string): { base: string; hotspot?: Hot
     }
     return { base, hotspot: ssid && passphrase ? { ssid, passphrase } : undefined }
 }
+
+/**
+ * Rewrites the host of a `ws://host:port` address, keeping its port and scheme.
+ *
+ * Used after joining a hotspot: the gateway of the network we just joined IS the host phone, read
+ * from our own DHCP lease, whereas the address in the QR code is whatever the host *believed* its
+ * address to be — and a host that gets that wrong produces a code that associates to Wi-Fi fine and
+ * then fails every dial. The port still has to come from the code, since that is the coordinator's,
+ * not something DHCP knows about.
+ *
+ * Returns `base` untouched if it can't be parsed or `host` is empty, so a failure here degrades to
+ * the old behaviour rather than producing a broken address.
+ */
+export function withHost(base: string, host: string): string {
+    if (!host) return base
+    const m = /^(wss?:\/\/)([^/?#]*)(.*)$/i.exec((base ?? '').trim())
+    if (!m) return base
+    const [, scheme, authority, rest] = m
+    // Keep the port if there is one. Only the last colon can start a port; an IPv6 literal in
+    // brackets has colons inside it that must not be mistaken for one.
+    const bracketed = /^\[.*\]$/.test(authority) ? '' : authority
+    const colon = bracketed.lastIndexOf(':')
+    const port = colon >= 0 && /^\d+$/.test(bracketed.slice(colon + 1)) ? bracketed.slice(colon) : ''
+    return `${scheme}${host}${port}${rest}`
+}

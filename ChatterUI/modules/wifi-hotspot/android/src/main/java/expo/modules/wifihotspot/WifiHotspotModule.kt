@@ -129,6 +129,16 @@ class WifiHotspotModule : Module() {
     Function("getJoinedNetworkIp") {
       joinedNetworkIp()
     }
+
+    // The address of whoever is SERVING the joined hotspot — which, on a hotspot, is by definition
+    // the phone hosting it. Authoritative in a way the scanned QR code is not: the host has to work
+    // out its own address to put in that code and can get it wrong (it did — a host advertising a
+    // hardcoded 192.168.49.1 while actually running on 192.168.43.1 is what made every join fail
+    // with a websocket error and left the host showing zero devices). This is read from the DHCP
+    // handshake this phone just completed, so it cannot disagree with reality.
+    Function("getJoinedNetworkGateway") {
+      joinedNetworkGateway()
+    }
   }
 
   private fun granted(permission: String) =
@@ -147,9 +157,11 @@ class WifiHotspotModule : Module() {
           promise.reject("E_HOTSPOT_CREDENTIALS", "Hotspot started but its credentials could not be read", null)
           return
         }
-        val ip = hotspotSelfIp()
-        Log.i(TAG, "startHotspot -> ssid='$ssid' ip='$ip'")
-        promise.resolve(mapOf("ssid" to ssid, "passphrase" to passphrase, "ip" to ip))
+        // Up to ~3s of polling: the AP interface routinely has no IPv4 yet at this instant.
+        resolveHotspotIp(0, 12) { ip ->
+          Log.i(TAG, "startHotspot -> ssid='$ssid' ip='$ip'")
+          promise.resolve(mapOf("ssid" to ssid, "passphrase" to passphrase, "ip" to ip))
+        }
       }
 
       override fun onStopped() {
@@ -196,19 +208,46 @@ class WifiHotspotModule : Module() {
     return ssid to passphrase
   }
 
-  // LocalOnlyHotspot does not hand back this phone's own address on the network it just created —
-  // only the well-known default subnet is documented (192.168.49.1). Looking for the actual
-  // ap-like interface first is the same belt-and-suspenders approach getLocalIpAddress() in
-  // bitchat-ble uses, rather than trusting a hardcoded constant on every OEM.
+  // LocalOnlyHotspot does not hand back this phone's own address on the network it just created,
+  // so it has to be read off the AP interface. Returns "" when it genuinely cannot be determined
+  // yet — deliberately NOT the documented 192.168.49.1 default, which is what this used to do and
+  // was flatly wrong on real hardware: a device whose hotspot actually came up on 192.168.43.1 was
+  // told to advertise 192.168.49.1, so joining phones associated to the Wi-Fi fine (the SSID and
+  // passphrase are real, they come from the reservation) and then failed every dial to the
+  // coordinator, leaving the host reporting zero devices. An empty answer lets the caller fall
+  // back to normal interface detection, which found the correct address all along.
   private fun hotspotSelfIp(): String {
-    val apLike = Regex("^(ap|softap|swlan|wlan1)\\d*$", RegexOption.IGNORE_CASE)
+    val apLike = Regex("^(ap|softap|swlan|wlan\\d+)\\d*$", RegexOption.IGNORE_CASE)
     return runCatching {
-      NetworkInterface.getNetworkInterfaces().toList()
-        .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) && apLike.matches(it.name) }
-        .flatMap { it.inetAddresses.toList() }
-        .firstOrNull { addr -> addr is Inet4Address && !addr.isLoopbackAddress }
-        ?.hostAddress
-    }.getOrNull() ?: "192.168.49.1"
+      val up = NetworkInterface.getNetworkInterfaces().toList()
+        .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+      // AP-named interfaces first; if the OEM names it something else entirely, any remaining
+      // private IPv4 is still a better answer than a constant that may not exist on this device.
+      val ordered = up.sortedBy { if (apLike.matches(it.name)) 0 else 1 }
+      for (iface in ordered) {
+        val addr = iface.inetAddresses.toList()
+          .filterIsInstance<Inet4Address>()
+          .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress && it.isSiteLocalAddress }
+        if (addr != null) {
+          Log.i(TAG, "hotspotSelfIp -> ${addr.hostAddress} on ${iface.name}")
+          return@runCatching addr.hostAddress ?: ""
+        }
+      }
+      ""
+    }.getOrNull() ?: ""
+  }
+
+  // The AP interface usually has no IPv4 at the instant onStarted() fires — that race is exactly
+  // what made the old code fall through to its hardcoded constant. Poll briefly instead of
+  // guessing, then hand back whatever was actually found (possibly "").
+  private fun resolveHotspotIp(attempt: Int, maxAttempts: Int, onResolved: (String) -> Unit) {
+    val ip = hotspotSelfIp()
+    if (ip.isNotEmpty() || attempt >= maxAttempts) {
+      if (ip.isEmpty()) Log.w(TAG, "hotspot started but no address appeared after $attempt tries")
+      onResolved(ip)
+      return
+    }
+    mainHandler.postDelayed({ resolveHotspotIp(attempt + 1, maxAttempts, onResolved) }, 250)
   }
 
   // --- join --------------------------------------------------------------------------------
@@ -321,6 +360,30 @@ class WifiHotspotModule : Module() {
         ?.mapNotNull { it.address as? Inet4Address }
         ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
         ?.hostAddress
+    }.getOrNull() ?: ""
+  }
+
+  // Two sources, both from the DHCP lease this phone just took from the host:
+  //   - dhcpServerAddress (API 30+) names the server directly — on a hotspot that IS the host;
+  //   - failing that, the default route's gateway, which on a hotspot subnet is the same device.
+  // A LocalOnlyHotspot has no internet uplink, so a default route is not guaranteed to exist and
+  // the DHCP server is the more reliable of the two where it is available.
+  private fun joinedNetworkGateway(): String {
+    val network = joinedNetwork ?: return ""
+    return runCatching {
+      val props = connectivityManager.getLinkProperties(network) ?: return@runCatching ""
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val dhcp = props.dhcpServerAddress
+        if (dhcp != null && !dhcp.isAnyLocalAddress && !dhcp.isLoopbackAddress) {
+          Log.i(TAG, "joinedNetworkGateway -> ${dhcp.hostAddress} (dhcp server)")
+          return@runCatching dhcp.hostAddress ?: ""
+        }
+      }
+      val gateway = props.routes
+        .mapNotNull { it.gateway as? Inet4Address }
+        .firstOrNull { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress }
+      if (gateway != null) Log.i(TAG, "joinedNetworkGateway -> ${gateway.hostAddress} (route)")
+      gateway?.hostAddress ?: ""
     }.getOrNull() ?: ""
   }
 }
