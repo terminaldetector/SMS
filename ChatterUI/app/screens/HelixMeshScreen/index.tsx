@@ -227,8 +227,11 @@ const HelixMeshScreen = () => {
         if (row) await store.load(row)
     }
 
-    const onJoinAgent = async () => {
-        const url = normalizeWs(wsUrl ?? '')
+    // `urlOverride` lets a QR scan join immediately with the address it just read, rather than
+    // waiting a render cycle for `wsUrl` state to catch up — `setWsUrl` right before calling this
+    // does not make the new value visible to this closure until the component re-renders.
+    const onJoinAgent = async (urlOverride?: string) => {
+        const url = normalizeWs(urlOverride ?? wsUrl ?? '')
         if (!url) {
             Logger.errorToast('Enter the coordinator address (e.g. 192.168.1.10:8790)')
             return
@@ -703,7 +706,7 @@ const HelixMeshScreen = () => {
                 <ThemedButton
                     label={agentJoining ? 'Joining…' : agentJoined ? 'Leave mesh' : 'Join as agent'}
                     variant={agentJoined ? 'critical' : 'primary'}
-                    onPress={agentJoined ? onLeaveAgent : onJoinAgent}
+                    onPress={agentJoined ? onLeaveAgent : () => onJoinAgent()}
                     buttonStyle={styles.gap}
                 />
                 {!!transferText && <Text style={[styles.node, styles.gap]}>{transferText}</Text>}
@@ -778,7 +781,10 @@ const HelixMeshScreen = () => {
                 onRetryIp={detectAndSetHostIp}
                 onScanned={(data) => {
                     setWsUrl(data)
-                    Logger.infoToast('Scanned host address')
+                    // Scanning IS the connect action — asking for a second, separate tap on "Join
+                    // as agent" after this is exactly the friction a QR code exists to remove.
+                    if (agentJoined) onLeaveAgent()
+                    void onJoinAgent(data)
                 }}
             />
 
