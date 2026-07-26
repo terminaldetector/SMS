@@ -163,8 +163,13 @@ class WifiHotspotModule : Module() {
           WifiManager.LocalOnlyHotspotCallback.ERROR_NO_CHANNEL -> "no Wi-Fi channel is available"
           WifiManager.LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED ->
             "this device or user profile disallows tethering"
+          // The most common real cause: the phone's OWN regular "Portable Wi-Fi hotspot" (system
+          // Settings > tethering) is already switched on — Android won't run a LocalOnlyHotspot on
+          // top of that, since it's already committed the radio to that. Turning that off is what
+          // resolves this, not anything this app can retry its way out of.
           WifiManager.LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE ->
-            "Wi-Fi is already in a mode that can't also host a hotspot"
+            "Wi-Fi is already in a mode that can't also host this — if regular Wi-Fi hotspot/tethering " +
+              "is on in system Settings, turn it off and try again"
           // ERROR_GENERIC covers the most common real case: system Location toggled off, which
           // LocalOnlyHotspot requires even once the permission itself is granted.
           else -> "the OS refused (code $reason) — check that Location is turned ON in system " +

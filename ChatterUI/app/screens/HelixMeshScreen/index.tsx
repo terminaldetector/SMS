@@ -7,6 +7,7 @@
 // First-experiments UI.
 
 import { AntDesign } from '@expo/vector-icons'
+import { closeFd, getContentFd } from '@vali98/react-native-fs'
 import * as ExpoCrypto from 'expo-crypto'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -98,12 +99,29 @@ async function requestHotspotPermission(): Promise<boolean> {
 
 // The GGUF's layer count, which the planner needs to divide the model. It isn't in the model DB
 // row, so read it back off the file — the same call the importer uses.
+// Traced from the fork's C++: loadLlamaModelInfo() reads GGUF metadata only (never touches tensor
+// data, so this is cheap regardless of file size) via a plain fopen() underneath — which, unlike
+// the real model-load path in LlamaLocal.ts, was never given the same content:// -> file-descriptor
+// resolution a model kept via "Link external" (rather than copied in) needs. fopen() can never open
+// a content:// URI directly, so every externally-linked model failed sharding with a bare "Failed to
+// load model info" and no indication why — the load() path worked fine because it already resolves
+// this, so the model could look completely healthy for chat while sharding stayed broken for it.
 async function readLayerCount(modelPath: string): Promise<number> {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { loadLlamaModelInfo } = require('cui-llama.rn')
-    const info: any = await loadLlamaModelInfo(modelPath)
-    const arch = info?.['general.architecture']
-    return Number(info?.[`${arch}.block_count`] ?? 0)
+    const isContentUri = modelPath.includes('content://')
+    const resolvedPath = isContentUri ? ((await getContentFd(modelPath)) ?? modelPath) : modelPath
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { loadLlamaModelInfo } = require('cui-llama.rn')
+        const info: any = await loadLlamaModelInfo(resolvedPath)
+        const arch = info?.['general.architecture']
+        const count = Number(info?.[`${arch}.block_count`] ?? 0)
+        if (!count) throw new Error(`no ${arch || '?'}.block_count in its metadata`)
+        return count
+    } catch (e) {
+        throw new Error(`couldn't read ${modelPath} (${e instanceof Error ? e.message : String(e)})`)
+    } finally {
+        if (isContentUri) await closeFd(resolvedPath)
+    }
 }
 
 export interface DetectedIp {
@@ -505,7 +523,7 @@ const HelixMeshScreen = () => {
             return
         }
         if (coord.agents().length === 0) {
-            Logger.errorToast('No agent phone has joined yet')
+            Logger.errorToast('No device has joined the mesh yet')
             return
         }
         setHostRunning(true)
@@ -759,7 +777,13 @@ const HelixMeshScreen = () => {
                 />
                 {hosting && (
                     <View style={styles.gap}>
-                        <Text style={styles.node}>
+                        <View style={styles.deviceBanner}>
+                            <Text style={styles.deviceBannerCount}>{hostAgents.length}</Text>
+                            <Text style={styles.deviceBannerLabel}>
+                                {hostAgents.length === 1 ? 'device connected to the mesh' : 'devices connected to the mesh'}
+                            </Text>
+                        </View>
+                        <Text style={[styles.node, styles.gap]}>
                             ● hosting on port {HOST_PORT}
                             {hostIp
                                 ? ` — other phone joins ${hostIp}:${HOST_PORT}${transportLabel(hostIpTransport)}`
@@ -777,18 +801,17 @@ const HelixMeshScreen = () => {
                                 Tap the QR icon (top right) to show the connect code
                             </Text>
                         </TouchableOpacity>
-                        <Text style={[styles.node, styles.gap]}>
-                            Agents joined ({hostAgents.length})
-                        </Text>
-                        {hostAgents.length === 0 ? (
-                            <Text style={styles.dim}>waiting for the other phone to join…</Text>
-                        ) : (
-                            hostAgents.map((a) => (
-                                <Text key={a} style={styles.node}>
-                                    • {a}
-                                </Text>
-                            ))
-                        )}
+                        <View style={styles.gap}>
+                            {hostAgents.length === 0 ? (
+                                <Text style={styles.dim}>waiting for the other phone to join…</Text>
+                            ) : (
+                                hostAgents.map((a) => (
+                                    <Text key={a} style={styles.node}>
+                                        • {a}
+                                    </Text>
+                                ))
+                            )}
+                        </View>
 
                         <ThemedTextInput
                             label="Prompt"
@@ -995,5 +1018,15 @@ const useStyles = () => {
             borderTopColor: color.neutral._300,
         },
         help: { color: color.text._500, marginTop: spacing.xl2, fontSize: fontSize.s },
+        deviceBanner: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingVertical: spacing.m,
+            borderRadius: spacing.m,
+            backgroundColor: color.primary._100,
+        },
+        deviceBannerCount: { color: color.primary._800, fontSize: fontSize.xl2, fontWeight: 'bold' },
+        deviceBannerLabel: { color: color.primary._700, fontSize: fontSize.m, marginLeft: spacing.s },
     })
 }
