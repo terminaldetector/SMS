@@ -281,6 +281,11 @@ const HelixMeshScreen = () => {
     const [hostQrExtra, setHostQrExtra] = useState('')
     const hotspotActiveRef = useRef(false)
 
+    // Subscribed, not read once: what this phone has loaded can change while it is already
+    // hosting, and both the offer served to joining phones and the line describing it have to
+    // follow that rather than freeze at whatever was loaded when hosting began.
+    const loadedModel = Llama.useLlamaModelStore((state) => state.model)
+
     // Level 3 sharding: one big model split across phones by llama.cpp RPC.
     // Non-empty once this phone's rpc-server is up: its announced "host:port". Doubles as the
     // "am I offering my RAM" flag, so the two can't disagree.
@@ -483,11 +488,15 @@ const HelixMeshScreen = () => {
         )
     }
 
-    // Keep the offer in step with the switch while hosting, so turning it off actually stops
-    // serving rather than only applying to the next session.
+    // Keep the offer in step with the switch AND with which model is loaded, for as long as
+    // hosting lasts. Watching only the switch was a real bug: the offer was a snapshot taken at
+    // "Start hosting", so a host that began hosting before loading its model went on serving
+    // nothing indefinitely. A joining phone then asked, got a truthful "no model offered", and
+    // reported it had nothing to work with — which is exactly the case this whole feature exists
+    // for, one phone having the file and the other not.
     useEffect(() => {
         if (coordRef.current && hosting) offerLoadedModel(coordRef.current, transferOn)
-    }, [transferOn, hosting])
+    }, [transferOn, hosting, loadedModel])
 
     const stopHotspotIfActive = () => {
         if (!hotspotActiveRef.current) return
@@ -847,11 +856,14 @@ const HelixMeshScreen = () => {
                                 : ''}
                         </Text>
                         <Text style={styles.dim}>
+                            {/* Driven by the subscribed `loadedModel`, not by reading the
+                                coordinator ref — a ref does not re-render, so this line used to
+                                keep claiming whatever was true when hosting started. */}
                             {!transferOn
                                 ? 'Not sending the model — each phone uses its own.'
-                                : coordRef.current?.modelOffered()
-                                  ? `Offering ${coordRef.current.modelOffered()} to phones that join`
-                                  : 'No model loaded, so there is nothing to send — load one in Models and restart hosting.'}
+                                : loadedModel
+                                  ? `Offering ${loadedModel.file} to phones that join`
+                                  : 'No model loaded, so there is nothing to send — load one in Models (no need to restart hosting).'}
                         </Text>
                         <TouchableOpacity onPress={() => setShowQrSheet(true)}>
                             <Text style={[styles.dim, styles.gap]}>

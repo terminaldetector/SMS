@@ -183,6 +183,16 @@ class WifiHotspotModule : Module() {
   // --- host --------------------------------------------------------------------------------
 
   private fun startHotspotInternal(promise: Promise) {
+    // Android allows one LocalOnlyHotspot request per caller and throws IllegalStateException
+    // ("Caller already has an active LocalOnlyHotspot request") on a second one. A reservation can
+    // outlive the UI's idea of whether hosting is on — a start that failed part-way, or a stop that
+    // never reached this module — so release any stale one rather than letting the retry throw.
+    hotspotReservation?.let {
+      Log.i(TAG, "startHotspot: closing a reservation left over from a previous session")
+      runCatching { it.close() }
+    }
+    hotspotReservation = null
+
     val callback = object : WifiManager.LocalOnlyHotspotCallback() {
       override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
         hotspotReservation = reservation
@@ -229,7 +239,14 @@ class WifiHotspotModule : Module() {
         promise.reject("E_HOTSPOT_FAILED", "Could not start the hotspot: $why", null)
       }
     }
-    wifiManager.startLocalOnlyHotspot(callback, mainHandler)
+    // Surfaces as a rejected promise with a readable reason rather than an unhandled
+    // IllegalStateException/SecurityException stack reaching JS.
+    try {
+      wifiManager.startLocalOnlyHotspot(callback, mainHandler)
+    } catch (e: Exception) {
+      Log.e(TAG, "startLocalOnlyHotspot threw", e)
+      promise.reject("E_HOTSPOT_FAILED", "Could not start the hotspot: ${e.message ?: e::class.java.simpleName}", e)
+    }
   }
 
   // SoftApConfiguration (typed, non-deprecated accessors) only exists from API 30; below that,
@@ -343,8 +360,12 @@ class WifiHotspotModule : Module() {
     // makes Android show its "Connect to device?" dialog all over again, so re-scanning a code for
     // a hotspot this phone is already joined to used to drop a working link and demand another tap.
     val existing = joinedNetwork
+    // Capabilities alone are not proof of life — a network the host tore down can still report
+    // them for a moment. Requiring a readable address means a hotspot that was restarted (which
+    // also changes its SSID, so this rarely even matches) can't be mistaken for a live one.
     if (existing != null && joinedSsid == ssid &&
-      connectivityManager.getNetworkCapabilities(existing) != null
+      connectivityManager.getNetworkCapabilities(existing) != null &&
+      joinedNetworkIp().isNotEmpty()
     ) {
       Log.i(TAG, "joinHotspot: already joined to $ssid, reusing it")
       connectivityManager.bindProcessToNetwork(existing)
