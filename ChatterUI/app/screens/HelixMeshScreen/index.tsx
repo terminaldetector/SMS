@@ -310,14 +310,23 @@ const HelixMeshScreen = () => {
         const base = httpBaseFromHost(wsAddr)
         if (!base) return
         setTransferText('Checking what the host offers…')
+        // Logged, not just shown: when this step fails the user only ever saw the generic "Load a
+        // model first" that follows, and the log recorded nothing at all between joining the
+        // hotspot and that message — which is precisely why a broken transfer was invisible in two
+        // rounds of logs. The address is included because getting it wrong is the likeliest cause.
+        Logger.info(`Asking the host at ${base} what model it offers`)
         const t = await syncModelFromHost(base, ({ received, total }) => {
             const pct = total > 0 ? Math.floor((received / total) * 100) : 0
             setTransferText(`Downloading the host's model… ${pct}%`)
         })
         if (!t) {
-            setTransferText('') // host isn't offering one — not an error, just nothing to do
+            setTransferText('')
+            // Either the host is genuinely offering nothing, or it could not be reached at all —
+            // and those look identical from here, so say so rather than staying silent.
+            Logger.warnToast(`No model offered at ${base} — is the host reachable, and does it have one loaded?`)
             return
         }
+        Logger.info(t.downloaded ? `Received ${t.downloaded} from the host` : `Already have ${t.offer.name}`)
         if (t.downloaded) Logger.infoToast(`Received ${t.downloaded} from the host`)
         setTransferText('')
 
@@ -349,7 +358,15 @@ const HelixMeshScreen = () => {
         }
         const store = Llama.useLlamaModelStore.getState()
         if (!store.context) {
-            Logger.errorToast('Load a model in TriangleUI first (Models), then join')
+            // Distinguish "you chose not to receive a model" from "we tried and it didn't arrive".
+            // The second is a fault worth chasing; the first is just how the setting is configured,
+            // and showing the same message for both sent the last debugging round down the wrong
+            // path entirely.
+            Logger.errorToast(
+                transferOn
+                    ? "No model here and none arrived from the host — check the warning above, or load one in Models"
+                    : 'Load a model in TriangleUI first (Models), then join'
+            )
             setAgentJoining(false)
             return
         }

@@ -68,6 +68,7 @@ class WifiHotspotModule : Module() {
 
   // Join side: kept so leaveHotspot() can unbind and release exactly what joinHotspot() requested.
   private var joinedNetwork: Network? = null
+  private var joinedSsid: String? = null
   private var joinCallback: ConnectivityManager.NetworkCallback? = null
 
   override fun definition() = ModuleDefinition {
@@ -265,35 +266,67 @@ class WifiHotspotModule : Module() {
   // passphrase are real, they come from the reservation) and then failed every dial to the
   // coordinator, leaving the host reporting zero devices. An empty answer lets the caller fall
   // back to normal interface detection, which found the correct address all along.
-  private fun hotspotSelfIp(): String {
-    val apLike = Regex("^(ap|softap|swlan|wlan\\d+)\\d*$", RegexOption.IGNORE_CASE)
-    return runCatching {
-      val up = NetworkInterface.getNetworkInterfaces().toList()
+  private fun addressOf(iface: NetworkInterface): String? =
+    runCatching {
+      iface.inetAddresses.toList()
+        .filterIsInstance<Inet4Address>()
+        .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress && it.isSiteLocalAddress }
+        ?.hostAddress
+    }.getOrNull()
+
+  private fun upInterfaces(): List<NetworkInterface> =
+    runCatching {
+      NetworkInterface.getNetworkInterfaces().toList()
         .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
-      // AP-named interfaces first; if the OEM names it something else entirely, any remaining
-      // private IPv4 is still a better answer than a constant that may not exist on this device.
-      val ordered = up.sortedBy { if (apLike.matches(it.name)) 0 else 1 }
-      for (iface in ordered) {
-        val addr = iface.inetAddresses.toList()
-          .filterIsInstance<Inet4Address>()
-          .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress && it.isSiteLocalAddress }
-        if (addr != null) {
-          Log.i(TAG, "hotspotSelfIp -> ${addr.hostAddress} on ${iface.name}")
-          return@runCatching addr.hostAddress ?: ""
-        }
+    }.getOrDefault(emptyList())
+
+  // Strictly the access-point interface. Kept separate from the looser search below because
+  // "any site-local address" is NOT a safe stand-in while the AP is still coming up: a mobile
+  // carrier hands out site-local addresses too (10.x — this very phone was seen on
+  // 10.224.204.191), so a looser check returns the carrier address the instant it is asked,
+  // stops the polling early, and puts an address no joining phone can ever reach into the QR.
+  private fun apInterfaceIp(): String {
+    val apLike = Regex("^(ap|softap|swlan|wlan\\d+)\\d*$", RegexOption.IGNORE_CASE)
+    for (iface in upInterfaces()) {
+      if (!apLike.matches(iface.name)) continue
+      val addr = addressOf(iface)
+      if (addr != null) {
+        Log.i(TAG, "hotspotSelfIp -> $addr on ${iface.name} (ap interface)")
+        return addr
       }
-      ""
-    }.getOrNull() ?: ""
+    }
+    return ""
+  }
+
+  // Last resort once polling is exhausted and no AP-named interface ever produced an address: an
+  // OEM may name it something unexpected. Cellular interfaces are excluded by name for the reason
+  // above — a carrier address here is not a fallback, it is a wrong answer.
+  private fun nonCellularIp(): String {
+    val cellular = Regex("^(rmnet|ccmni|pdp|wwan|clat).*$", RegexOption.IGNORE_CASE)
+    for (iface in upInterfaces()) {
+      if (cellular.matches(iface.name)) continue
+      val addr = addressOf(iface)
+      if (addr != null) {
+        Log.i(TAG, "hotspotSelfIp -> $addr on ${iface.name} (fallback, no ap interface found)")
+        return addr
+      }
+    }
+    return ""
   }
 
   // The AP interface usually has no IPv4 at the instant onStarted() fires — that race is exactly
-  // what made the old code fall through to its hardcoded constant. Poll briefly instead of
-  // guessing, then hand back whatever was actually found (possibly "").
+  // what made the old code fall through to its hardcoded constant. Poll for the AP interface
+  // specifically, and only widen the search once that has genuinely run out of time.
   private fun resolveHotspotIp(attempt: Int, maxAttempts: Int, onResolved: (String) -> Unit) {
-    val ip = hotspotSelfIp()
-    if (ip.isNotEmpty() || attempt >= maxAttempts) {
-      if (ip.isEmpty()) Log.w(TAG, "hotspot started but no address appeared after $attempt tries")
+    val ip = apInterfaceIp()
+    if (ip.isNotEmpty()) {
       onResolved(ip)
+      return
+    }
+    if (attempt >= maxAttempts) {
+      val fallback = nonCellularIp()
+      if (fallback.isEmpty()) Log.w(TAG, "hotspot started but no address appeared after $attempt tries")
+      onResolved(fallback)
       return
     }
     mainHandler.postDelayed({ resolveHotspotIp(attempt + 1, maxAttempts, onResolved) }, 250)
@@ -306,7 +339,20 @@ class WifiHotspotModule : Module() {
       promise.reject("E_ARGS", "ssid must not be empty", null)
       return
     }
-    // joinHotspot replaces whatever this phone was bound to before; it does not stack requests.
+    // Already on this exact network? Reuse it. Tearing the request down and raising a new one
+    // makes Android show its "Connect to device?" dialog all over again, so re-scanning a code for
+    // a hotspot this phone is already joined to used to drop a working link and demand another tap.
+    val existing = joinedNetwork
+    if (existing != null && joinedSsid == ssid &&
+      connectivityManager.getNetworkCapabilities(existing) != null
+    ) {
+      Log.i(TAG, "joinHotspot: already joined to $ssid, reusing it")
+      connectivityManager.bindProcessToNetwork(existing)
+      promise.resolve(true)
+      return
+    }
+
+    // Otherwise this replaces whatever this phone was bound to before; it does not stack requests.
     releaseJoinedNetwork()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -348,8 +394,16 @@ class WifiHotspotModule : Module() {
         settled = true
         connectivityManager.bindProcessToNetwork(network)
         joinedNetwork = network
-        Log.i(TAG, "joinHotspot: bound to $ssid ($security)")
-        promise.resolve(true)
+        joinedSsid = ssid
+        // onAvailable only means associated — DHCP may still be settling, so LinkProperties can
+        // have neither an address nor a gateway for another moment. Resolving straight away means
+        // the very next thing JS does (ask for the gateway, then dial the host) races that and
+        // silently falls back to the address in the QR code. Same race the host side had; it
+        // belongs on both ends.
+        awaitLinkReady(network, 0, 12) {
+          Log.i(TAG, "joinHotspot: bound to $ssid ($security) ip='${joinedNetworkIp()}' gw='${joinedNetworkGateway()}'")
+          promise.resolve(true)
+        }
       }
 
       override fun onUnavailable() {
@@ -405,6 +459,19 @@ class WifiHotspotModule : Module() {
     }
   }
 
+  // Waits for the joined network to actually carry an address and a gateway before the join is
+  // reported as done. Gives up after the allotted tries rather than failing: a usable link with no
+  // readable gateway still works via the address from the QR code.
+  private fun awaitLinkReady(network: Network, attempt: Int, maxAttempts: Int, onReady: () -> Unit) {
+    val ready = joinedNetworkIp().isNotEmpty() && joinedNetworkGateway().isNotEmpty()
+    if (ready || attempt >= maxAttempts) {
+      if (!ready) Log.w(TAG, "joinHotspot: link not fully described after $attempt tries")
+      onReady()
+      return
+    }
+    mainHandler.postDelayed({ awaitLinkReady(network, attempt + 1, maxAttempts, onReady) }, 250)
+  }
+
   private fun releaseJoinedNetwork() {
     try {
       joinCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
@@ -413,6 +480,7 @@ class WifiHotspotModule : Module() {
     }
     joinCallback = null
     joinedNetwork = null
+    joinedSsid = null
   }
 
   // Empty even after a real join is one legitimate case: joinHotspotLegacy() (pre-API-29) has no
