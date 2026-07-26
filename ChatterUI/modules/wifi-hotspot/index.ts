@@ -12,15 +12,27 @@ import { requireOptionalNativeModule } from 'expo'
 export interface HotspotCredentials {
     ssid: string
     passphrase: string
-    /** This phone's address on the hotspot it just started — normally 192.168.49.1. */
+    /**
+     * This phone's address on the hotspot it just started. '' when it could not be determined —
+     * deliberately not a guess, since a wrong address here silently breaks every join.
+     */
     ip: string
+    /** 'wpa2' | 'wpa3' | 'open' — what the AP actually came up as, so the joiner can match it. */
+    security: string
 }
 
 export interface WifiHotspotModule {
     /** False below Android 8 (API 26) — LocalOnlyHotspot does not exist there. */
     isSupported(): boolean
-    /** Runtime location permission the HOST needs; Android requires it for this API on every version. */
+    /** Whether the runtime permission the HOST needs is already granted. */
     requestPermissions(): Promise<boolean>
+    /**
+     * Which Android runtime permission this API level gates the hotspot on:
+     * `android.permission.NEARBY_WIFI_DEVICES` from Android 13, `ACCESS_FINE_LOCATION` before it.
+     * Asking for the wrong one gets a grant but not the capability, and startHotspot still dies
+     * with a SecurityException.
+     */
+    getRequiredPermission(): string
     /**
      * Starts an ad-hoc Wi-Fi AP with no internet uplink and returns its credentials. Rejects with a
      * specific reason otherwise — in particular, this can fail even with location permission
@@ -34,7 +46,7 @@ export interface WifiHotspotModule {
      * after associating, since this network has no internet and Android would not make it the
      * default route on its own.
      */
-    joinHotspot(ssid: string, passphrase: string): Promise<boolean>
+    joinHotspot(ssid: string, passphrase: string, security?: string): Promise<boolean>
     /** Undoes joinHotspot's process bind and releases the requested network. */
     leaveHotspot(): Promise<void>
     /**

@@ -8,6 +8,12 @@
 export interface HotspotCreds {
     ssid: string
     passphrase: string
+    /**
+     * 'wpa2' | 'wpa3' | 'open' — what the host's access point actually came up as. Optional, and
+     * absent from codes made by earlier builds; the joiner treats a missing value as WPA2, which is
+     * what those builds always assumed anyway.
+     */
+    security?: string
 }
 
 /**
@@ -15,7 +21,11 @@ export interface HotspotCreds {
  * scan carries both "which Wi-Fi to join" and "which mesh to join after that".
  */
 export function encodeHotspotQuery(creds: HotspotCreds): string {
-    return `?ssid=${encodeURIComponent(creds.ssid)}&pass=${encodeURIComponent(creds.passphrase)}`
+    const base = `?ssid=${encodeURIComponent(creds.ssid)}&pass=${encodeURIComponent(creds.passphrase)}`
+    // Only sent when the host actually knows: a WPA3 access point refuses a WPA2 supplicant, and
+    // that failure is reported by Android as an ordinary association failure, i.e. looks exactly
+    // like a wrong password.
+    return creds.security ? `${base}&sec=${encodeURIComponent(creds.security)}` : base
 }
 
 /**
@@ -33,6 +43,7 @@ export function parseScannedAddress(data: string): { base: string; hotspot?: Hot
     const query = trimmed.slice(qIndex + 1)
     let ssid: string | undefined
     let passphrase: string | undefined
+    let security: string | undefined
     for (const pair of query.split('&')) {
         const eq = pair.indexOf('=')
         if (eq < 0) continue
@@ -47,8 +58,12 @@ export function parseScannedAddress(data: string): { base: string; hotspot?: Hot
         }
         if (key === 'ssid') ssid = value
         else if (key === 'pass') passphrase = value
+        else if (key === 'sec') security = value
     }
-    return { base, hotspot: ssid && passphrase ? { ssid, passphrase } : undefined }
+    return {
+        base,
+        hotspot: ssid && passphrase ? { ssid, passphrase, ...(security ? { security } : {}) } : undefined,
+    }
 }
 
 /**

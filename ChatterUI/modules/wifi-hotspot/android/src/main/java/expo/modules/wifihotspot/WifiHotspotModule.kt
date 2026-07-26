@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.SoftApConfiguration
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
@@ -22,6 +23,16 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 private const val TAG = "WifiHotspot"
+
+// Carried across to the joining phone (via the QR code) so it builds a matching specifier instead
+// of assuming WPA2 and silently failing to associate with a WPA3 access point.
+private const val SECURITY_OPEN = "open"
+private const val SECURITY_WPA2 = "wpa2"
+private const val SECURITY_WPA3 = "wpa3"
+
+// Long enough to read and accept the system "Connect to device?" dialog, short enough that a
+// request nobody answers fails visibly instead of looking hung.
+private const val JOIN_TIMEOUT_MS = 45_000
 
 /**
  * Ad-hoc, internet-free Wi-Fi connection between two phones — Android's LocalOnlyHotspot on the
@@ -68,10 +79,14 @@ class WifiHotspotModule : Module() {
     }
 
     AsyncFunction("requestPermissions") { promise: Promise ->
-      // Expo's permission-request UI flow lives in JS (expo-location's askAsync, which prompts for
-      // the exact same ACCESS_FINE_LOCATION grant this feature needs); this just reports whether
-      // it is already in place, matching bitchat-ble's requestPermissions().
-      promise.resolve(granted(Manifest.permission.ACCESS_FINE_LOCATION))
+      // The prompt itself is raised from JS (PermissionsAndroid); this only reports whether the
+      // grant is already in place, matching bitchat-ble's requestPermissions().
+      promise.resolve(granted(hotspotPermission()))
+    }
+
+    // Which permission this API level actually gates the hotspot on, so JS asks for the right one.
+    Function("getRequiredPermission") {
+      hotspotPermission()
     }
 
     // Starts an ad-hoc Wi-Fi AP with no internet uplink and resolves its credentials once Android
@@ -83,8 +98,15 @@ class WifiHotspotModule : Module() {
         promise.reject("E_UNSUPPORTED", "This Android version has no local-hotspot API (needs Android 8+)", null)
         return@AsyncFunction
       }
-      if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
-        promise.reject("E_PERMISSION", "Location permission is required to start a Wi-Fi hotspot", null)
+      if (!granted(hotspotPermission())) {
+        promise.reject(
+          "E_PERMISSION",
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            "The nearby-devices permission is required to start a Wi-Fi hotspot"
+          else
+            "Location permission is required to start a Wi-Fi hotspot",
+          null
+        )
         return@AsyncFunction
       }
       startHotspotInternal(promise)
@@ -104,8 +126,10 @@ class WifiHotspotModule : Module() {
     // that bind, sockets would keep preferring the phone's normal Wi-Fi/mobile data even after
     // associating: the hotspot network has no internet, so Android would never pick it as the
     // default route on its own.
-    AsyncFunction("joinHotspot") { ssid: String, passphrase: String, promise: Promise ->
-      joinHotspotInternal(ssid, passphrase, promise)
+    // `security` is "wpa2" (default), "wpa3" or "open" — what the host reported its AP actually
+    // came up as. Optional so a code produced by an older build still joins as WPA2.
+    AsyncFunction("joinHotspot") { ssid: String, passphrase: String, security: String?, promise: Promise ->
+      joinHotspotInternal(ssid, passphrase, security ?: SECURITY_WPA2, promise)
     }
 
     AsyncFunction("leaveHotspot") { promise: Promise ->
@@ -144,13 +168,24 @@ class WifiHotspotModule : Module() {
   private fun granted(permission: String) =
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+  // Android 13 moved startLocalOnlyHotspot() off ACCESS_FINE_LOCATION and onto its own
+  // NEARBY_WIFI_DEVICES runtime permission. Asking for location on a Tiramisu+ device gets the
+  // grant but not the capability, and the call still dies with a SecurityException reading
+  // "does not have nearby devices permission" — which is exactly what happened on a real phone.
+  private fun hotspotPermission(): String =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      Manifest.permission.NEARBY_WIFI_DEVICES
+    } else {
+      Manifest.permission.ACCESS_FINE_LOCATION
+    }
+
   // --- host --------------------------------------------------------------------------------
 
   private fun startHotspotInternal(promise: Promise) {
     val callback = object : WifiManager.LocalOnlyHotspotCallback() {
       override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
         hotspotReservation = reservation
-        val (ssid, passphrase) = credentialsFrom(reservation)
+        val (ssid, passphrase, security) = credentialsFrom(reservation)
         if (ssid.isEmpty()) {
           hotspotReservation = null
           runCatching { reservation.close() }
@@ -159,8 +194,10 @@ class WifiHotspotModule : Module() {
         }
         // Up to ~3s of polling: the AP interface routinely has no IPv4 yet at this instant.
         resolveHotspotIp(0, 12) { ip ->
-          Log.i(TAG, "startHotspot -> ssid='$ssid' ip='$ip'")
-          promise.resolve(mapOf("ssid" to ssid, "passphrase" to passphrase, "ip" to ip))
+          Log.i(TAG, "startHotspot -> ssid='$ssid' security='$security' ip='$ip'")
+          promise.resolve(
+            mapOf("ssid" to ssid, "passphrase" to passphrase, "ip" to ip, "security" to security)
+          )
         }
       }
 
@@ -197,15 +234,27 @@ class WifiHotspotModule : Module() {
   // SoftApConfiguration (typed, non-deprecated accessors) only exists from API 30; below that,
   // LocalOnlyHotspotReservation only ever had the older WifiConfiguration getter.
   @Suppress("DEPRECATION")
-  private fun credentialsFrom(reservation: WifiManager.LocalOnlyHotspotReservation): Pair<String, String> {
+  private fun credentialsFrom(reservation: WifiManager.LocalOnlyHotspotReservation): Triple<String, String, String> {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       val config = reservation.softApConfiguration
-      if (config != null) return (config.ssid ?: "") to (config.passphrase ?: "")
+      if (config != null) {
+        // Which WPA generation the AP actually came up as. Newer devices can bring a
+        // LocalOnlyHotspot up as WPA3, and a joiner that assumes WPA2 will never associate with
+        // it — the failure surfaces as a generic "wrong password", which is badly misleading.
+        val security = when (config.securityType) {
+          SoftApConfiguration.SECURITY_TYPE_OPEN -> SECURITY_OPEN
+          SoftApConfiguration.SECURITY_TYPE_WPA3_SAE -> SECURITY_WPA3
+          // Transition mode accepts a WPA2 supplicant, so it is joined as WPA2 on purpose.
+          else -> SECURITY_WPA2
+        }
+        return Triple(config.ssid ?: "", config.passphrase ?: "", security)
+      }
     }
     val legacy = reservation.wifiConfiguration
     val ssid = legacy?.SSID?.removeSurrounding("\"") ?: ""
     val passphrase = legacy?.preSharedKey?.removeSurrounding("\"") ?: ""
-    return ssid to passphrase
+    // Below API 30 a LocalOnlyHotspot is always WPA2-PSK; WPA3 did not exist for this API yet.
+    return Triple(ssid, passphrase, SECURITY_WPA2)
   }
 
   // LocalOnlyHotspot does not hand back this phone's own address on the network it just created,
@@ -252,7 +301,7 @@ class WifiHotspotModule : Module() {
 
   // --- join --------------------------------------------------------------------------------
 
-  private fun joinHotspotInternal(ssid: String, passphrase: String, promise: Promise) {
+  private fun joinHotspotInternal(ssid: String, passphrase: String, security: String, promise: Promise) {
     if (ssid.isEmpty()) {
       promise.reject("E_ARGS", "ssid must not be empty", null)
       return
@@ -261,7 +310,7 @@ class WifiHotspotModule : Module() {
     releaseJoinedNetwork()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      joinHotspotModern(ssid, passphrase, promise)
+      joinHotspotModern(ssid, passphrase, security, promise)
     } else {
       joinHotspotLegacy(ssid, passphrase, promise)
     }
@@ -270,17 +319,26 @@ class WifiHotspotModule : Module() {
   // WifiNetworkSpecifier (API 29+): the officially supported way for an app to join a specific
   // Wi-Fi network for its own use, without touching the phone's saved network list and — the whole
   // point of this API existing — without needing location permission on the joining side at all.
-  private fun joinHotspotModern(ssid: String, passphrase: String, promise: Promise) {
-    val specifier = WifiNetworkSpecifier.Builder()
-      .setSsid(ssid)
-      .setWpa2Passphrase(passphrase)
-      .build()
+  //
+  // Android shows the user a system dialog for this request and will not associate until they
+  // accept it, so the failure path here is at least as often "nobody tapped Connect" as it is a
+  // genuinely bad credential.
+  private fun joinHotspotModern(ssid: String, passphrase: String, security: String, promise: Promise) {
+    val builder = WifiNetworkSpecifier.Builder().setSsid(ssid)
+    when {
+      security == SECURITY_OPEN -> { /* no passphrase to set */ }
+      // A WPA3 access point will not accept a WPA2 supplicant, and the resulting failure looks
+      // exactly like a wrong password — so the host tells us which it is rather than guessing.
+      security == SECURITY_WPA3 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+        builder.setWpa3Passphrase(passphrase)
+      else -> builder.setWpa2Passphrase(passphrase)
+    }
     val request = NetworkRequest.Builder()
       .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
       // A LocalOnlyHotspot network has no internet uplink by design; without removing this
       // capability the request would never be satisfied by it.
       .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-      .setNetworkSpecifier(specifier)
+      .setNetworkSpecifier(builder.build())
       .build()
 
     var settled = false
@@ -290,19 +348,28 @@ class WifiHotspotModule : Module() {
         settled = true
         connectivityManager.bindProcessToNetwork(network)
         joinedNetwork = network
-        Log.i(TAG, "joinHotspot: bound to $ssid")
+        Log.i(TAG, "joinHotspot: bound to $ssid ($security)")
         promise.resolve(true)
       }
 
       override fun onUnavailable() {
         if (settled) return
         settled = true
-        Log.e(TAG, "joinHotspot: request for $ssid timed out or was refused")
-        promise.reject("E_JOIN_FAILED", "Could not join $ssid — wrong password, or it is out of range", null)
+        Log.e(TAG, "joinHotspot: request for $ssid ($security) was refused or timed out")
+        promise.reject(
+          "E_JOIN_FAILED",
+          "Could not join $ssid — tap \"Connect\" on the dialog Android shows when joining. " +
+            "If no dialog appeared, the host may have restarted its hotspot since this code was " +
+            "made (the name and password change every time) — show a fresh QR and scan it again.",
+          null
+        )
       }
     }
     joinCallback = callback
-    connectivityManager.requestNetwork(request, callback, mainHandler)
+    // Explicit timeout so a request that nobody accepts fails predictably with the message above,
+    // rather than sitting on whatever internal deadline the platform happens to use (~80s was
+    // observed) and leaving the UI looking hung. Generous enough to read and tap the dialog.
+    connectivityManager.requestNetwork(request, callback, mainHandler, JOIN_TIMEOUT_MS)
   }
 
   // Pre-Android-10 fallback: WifiNetworkSpecifier does not exist yet, so this falls back to the

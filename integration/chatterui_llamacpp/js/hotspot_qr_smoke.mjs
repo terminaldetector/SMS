@@ -55,6 +55,22 @@ const check = (c, w) => { if (!c) throw new Error('FAIL: ' + w); pass++; console
   check(base === 'ws://192.168.1.10:8790', 'surrounding whitespace is trimmed')
 }
 
+// --- security type rides along, so a WPA3 access point isn't joined as WPA2 ---
+{
+  const creds = { ssid: 'AndroidShare_3234', passphrase: 'abcd1234', security: 'wpa3' }
+  const { hotspot } = parseScannedAddress(`ws://192.168.43.1:8790${encodeHotspotQuery(creds)}`)
+  check(hotspot.security === 'wpa3', 'the access point security type round-trips')
+  check(hotspot.ssid === creds.ssid && hotspot.passphrase === creds.passphrase,
+    'adding the security field does not disturb ssid/passphrase')
+}
+{
+  // A code from an older build carries no `sec` at all — must still parse, with security absent
+  // so the joiner falls back to WPA2 exactly as those builds always assumed.
+  const { hotspot } = parseScannedAddress('ws://192.168.43.1:8790?ssid=Old&pass=secret123')
+  check(!!hotspot, 'a code without a security field still yields credentials')
+  check(hotspot.security === undefined, 'missing security stays undefined rather than guessed')
+}
+
 // --- withHost: the gateway overrides whatever address the host put in its own QR code ---
 // This is the fix for a host that advertised a hardcoded 192.168.49.1 while actually running on
 // 192.168.43.1 — joining phones associated fine, then failed every dial to the coordinator.

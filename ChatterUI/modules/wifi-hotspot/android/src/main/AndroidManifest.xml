@@ -1,13 +1,23 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- WifiManager.startLocalOnlyHotspot() requires this on the HOST device, on every API level —
-         unlike BLE scanning, there is no "neverForLocation" equivalent that exempts it. The joining
-         device does NOT need this: WifiNetworkSpecifier (the modern join path, API 29+) was built
-         specifically so a per-connection Wi-Fi join needs no location permission at all. -->
+    <!-- Android 13 (API 33) moved the Wi-Fi APIs off the location permission onto their own
+         runtime permission, and startLocalOnlyHotspot() is one of them: without this, a Tiramisu+
+         device throws "does not have nearby devices permission" no matter how thoroughly
+         ACCESS_FINE_LOCATION is granted. neverForLocation asserts what is actually true here — the
+         hotspot is used to carry mesh traffic, never to work out where the phone is. -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
+
+    <!-- Pre-33, the same call is gated on location instead. Declared without maxSdkVersion because
+         the bitchat-ble module declares it unconditionally too, and two modules asking for one
+         permission with different maxSdkVersion values is a manifest-merge conflict. The runtime
+         code below asks for whichever one the running API level actually wants. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- Only exercised by the pre-API-29 join fallback (WifiConfiguration + addNetwork); the
-         WifiNetworkSpecifier path used on modern Android needs no Wi-Fi-state-changing permission. -->
+    <!-- startLocalOnlyHotspot() needs this on every API level, and it is also what the pre-API-29
+         join fallback (WifiConfiguration + addNetwork) uses. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 </manifest>

@@ -84,11 +84,23 @@ function wifiHotspotModule() {
 async function requestHotspotPermission(): Promise<boolean> {
     if (Platform.OS !== 'android') return true
     try {
-        const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION, {
-            title: 'Location permission',
-            message:
-                'Android requires this to start a direct Wi-Fi hotspot between phones, even though ' +
-                'the app has no use for your location.',
+        // Which permission gates the hotspot depends on the API level, and asking for the wrong one
+        // yields a grant without the capability — startHotspot then still dies with a
+        // SecurityException ("does not have nearby devices permission" on Android 13+). The native
+        // side decides; this only raises the prompt.
+        const required =
+            wifiHotspotModule()?.getRequiredPermission?.() ??
+            (Number(Platform.Version) >= 33
+                ? PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES
+                : PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION)
+        const nearby = required === PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES
+        const result = await PermissionsAndroid.request(required, {
+            title: nearby ? 'Nearby devices permission' : 'Location permission',
+            message: nearby
+                ? 'Android requires this to start a direct Wi-Fi hotspot between phones. It is not ' +
+                  'used to work out where you are.'
+                : 'Android requires this to start a direct Wi-Fi hotspot between phones, even though ' +
+                  'the app has no use for your location.',
             buttonPositive: 'OK',
         })
         return result === PermissionsAndroid.RESULTS.GRANTED
@@ -479,7 +491,11 @@ const HelixMeshScreen = () => {
                     throw new Error('This device has no Wi-Fi hotspot API (needs Android 8+)')
                 }
                 if (!(await requestHotspotPermission())) {
-                    throw new Error('Location permission is needed to start a direct Wi-Fi hotspot')
+                    throw new Error(
+                        Number(Platform.Version) >= 33
+                            ? 'The nearby-devices permission is needed to start a direct Wi-Fi hotspot'
+                            : 'Location permission is needed to start a direct Wi-Fi hotspot'
+                    )
                 }
                 // Android requires this permission for the hotspot itself, not because the app has
                 // any use for location — see requestHotspotPermission()'s prompt copy.
@@ -986,7 +1002,13 @@ const HelixMeshScreen = () => {
                             }
                             Logger.infoToast("Joining the host's Wi-Fi hotspot…")
                             try {
-                                if (!(await wifiHotspot.joinHotspot(hotspot.ssid, hotspot.passphrase))) {
+                                if (
+                                    !(await wifiHotspot.joinHotspot(
+                                        hotspot.ssid,
+                                        hotspot.passphrase,
+                                        hotspot.security
+                                    ))
+                                ) {
                                     Logger.errorToast("Could not join the host's Wi-Fi hotspot")
                                     return
                                 }
