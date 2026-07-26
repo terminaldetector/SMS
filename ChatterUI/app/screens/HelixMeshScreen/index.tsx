@@ -62,6 +62,22 @@ const HOST_PORT = 8790
 const RPC_PORT = 50052
 type HostMode = 'single' | 'voting'
 
+// A mesh session belongs to the app, not to this screen being on top.
+//
+// These used to be component refs torn down by an unmount effect, which meant simply walking over
+// to Models to load a model — the one thing a host most often needs to do — silently closed the
+// coordinator and stopped the hotspot. Coming back showed "Start hosting" again as if nothing had
+// been running, and any phone mid-join just found a dead port. Hosting now ends only when the user
+// says so, or when the app does.
+let liveCoord: HelixCoordinator | null = null
+let liveHotspotActive = false
+let liveHostIp = ''
+let liveHostIpTransport = ''
+let liveHostQrExtra = ''
+let liveAgent: HelixAgentNode | null = null
+let liveAgentOnline = false
+let liveAgentJoinedHotspot = false
+
 // Lazily required like the other native bits, so nothing here runs at app startup.
 function deviceTotalMemory(): number {
     try {
@@ -239,17 +255,17 @@ const HelixMeshScreen = () => {
 
     // L2 agent state
     const [wsUrl, setWsUrl] = useMMKVString(WS_KEY)
-    const [agentJoined, setAgentJoined] = useState(false)
+    const [agentJoined, setAgentJoined] = useState(!!liveAgent)
     const [agentJoining, setAgentJoining] = useState(false)
     // Distinct from agentJoined: the session stays joined across a Wi-Fi drop while the node
     // reconnects, and the UI should say so rather than keep claiming "online".
-    const [agentOnline, setAgentOnline] = useState(false)
+    const [agentOnline, setAgentOnline] = useState(liveAgentOnline)
     const [showQrSheet, setShowQrSheet] = useState(false)
-    const agentRef = useRef<HelixAgentNode | null>(null)
+    const agentRef = useRef<HelixAgentNode | null>(liveAgent)
     // True once THIS join went through a direct Wi-Fi hotspot — leaving the mesh should also
     // release that network, or the phone stays bound to it (and off its normal Wi-Fi/mobile data)
     // even after the host stops hosting.
-    const joinedHotspotRef = useRef(false)
+    const joinedHotspotRef = useRef(liveAgentJoinedHotspot)
 
     // Model transfer: the host serves its GGUF on the same port, the joining phone pulls it if it
     // doesn't already have that exact file. useMMKVBoolean returns undefined until it's been set,
@@ -259,10 +275,10 @@ const HelixMeshScreen = () => {
     const [transferText, setTransferText] = useState('')
 
     // Device-to-device (no PC): this phone hosts the coordinator.
-    const [hosting, setHosting] = useState(false)
+    const [hosting, setHosting] = useState(!!liveCoord)
     const [hostStarting, setHostStarting] = useState(false)
-    const [hostIp, setHostIp] = useState('')
-    const [hostIpTransport, setHostIpTransport] = useState('')
+    const [hostIp, setHostIp] = useState(liveHostIp)
+    const [hostIpTransport, setHostIpTransport] = useState(liveHostIpTransport)
     // True when hostIp came from a saved previous session, not this session's own detection — a
     // phone's LAN IP is usually stable on the same Wi-Fi, but "usually" isn't "definitely", so the
     // QR still shows (nothing to hunt for) with a note that it may be stale.
@@ -272,14 +288,14 @@ const HelixMeshScreen = () => {
     const [hostMode, setHostMode] = useState<HostMode>('single')
     const [hostRunning, setHostRunning] = useState(false)
     const [hostResult, setHostResult] = useState('')
-    const coordRef = useRef<HelixCoordinator | null>(null)
+    const coordRef = useRef<HelixCoordinator | null>(liveCoord)
 
     // Direct Wi-Fi hotspot ("fast connect"): the query string this session's QR appends after
     // ws://host:port, and whether hosting actually has a hotspot running that needs stopping.
     const [useHotspot, setUseHotspot] = useMMKVBoolean(USE_HOTSPOT_KEY)
     const hotspotOn = !!useHotspot
-    const [hostQrExtra, setHostQrExtra] = useState('')
-    const hotspotActiveRef = useRef(false)
+    const [hostQrExtra, setHostQrExtra] = useState(liveHostQrExtra)
+    const hotspotActiveRef = useRef(liveHotspotActive)
 
     // Subscribed, not read once: what this phone has loaded can change while it is already
     // hosting, and both the offer served to joining phones and the line describing it have to
@@ -326,9 +342,7 @@ const HelixMeshScreen = () => {
         })
         if (!t) {
             setTransferText('')
-            // Either the host is genuinely offering nothing, or it could not be reached at all —
-            // and those look identical from here, so say so rather than staying silent.
-            Logger.warnToast(`No model offered at ${base} — is the host reachable, and does it have one loaded?`)
+            Logger.warnToast(`Nothing to transfer from ${base}`)
             return
         }
         Logger.info(t.downloaded ? `Received ${t.downloaded} from the host` : `Already have ${t.offer.name}`)
@@ -389,9 +403,13 @@ const HelixMeshScreen = () => {
             const node = new HelixAgentNode(agentId, AGENT_SECRET, runner, {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
             })
-            node.onStateChange = setAgentOnline
+            node.onStateChange = (v) => {
+                liveAgentOnline = v
+                setAgentOnline(v)
+            }
             await node.connect(url)
             agentRef.current = node
+            liveAgent = node
             setAgentJoined(true)
             setAgentOnline(true)
             Logger.infoToast(`Joined mesh as agent ${agentId}`)
@@ -405,45 +423,47 @@ const HelixMeshScreen = () => {
     const onLeaveAgent = () => {
         agentRef.current?.close()
         agentRef.current = null
+        liveAgent = null
+        liveAgentOnline = false
         setAgentJoined(false)
         setAgentOnline(false)
         if (joinedHotspotRef.current) {
             joinedHotspotRef.current = false
+            liveAgentJoinedHotspot = false
             const hotspot = wifiHotspotModule()
             if (hotspot) void hotspot.leaveHotspot().catch(() => {})
         }
         Logger.infoToast('Left the mesh')
     }
 
-    // Leaving the screen shouldn't strand a live agent connection, or leave this phone bound to a
-    // hotspot network it can no longer see or control from anywhere.
+    // Nothing is torn down here on purpose. Leaving this screen is not leaving the mesh — going to
+    // Models to load a model is a normal part of hosting, and it used to kill the session outright.
+    // The live node's state-change callback belongs to whichever mount is currently showing, so it
+    // is rebound here rather than left pointing at a component that no longer exists.
     useEffect(() => {
-        return () => {
-            agentRef.current?.close()
-            if (joinedHotspotRef.current) {
-                joinedHotspotRef.current = false
-                const hotspot = wifiHotspotModule()
-                if (hotspot) void hotspot.leaveHotspot().catch(() => {})
-            }
+        const node = agentRef.current
+        if (!node) return
+        node.onStateChange = (v) => {
+            liveAgentOnline = v
+            setAgentOnline(v)
         }
+        setAgentOnline(liveAgentOnline)
     }, [])
 
-    // Poll the coordinator's joined agents while hosting, and tear the server down on unmount.
+    // Keep the module-level session in step with what this screen shows, so a later mount restores
+    // the same picture instead of a blank one.
+    useEffect(() => {
+        liveHostIp = hostIp
+        liveHostIpTransport = hostIpTransport
+        liveHostQrExtra = hostQrExtra
+    }, [hostIp, hostIpTransport, hostQrExtra])
+
+    // Poll the coordinator's joined agents while hosting.
     useEffect(() => {
         if (!hosting) return
         const t = setInterval(() => setHostAgents(coordRef.current?.agents() ?? []), 1000)
         return () => clearInterval(t)
     }, [hosting])
-    useEffect(() => {
-        return () => {
-            coordRef.current?.close()
-            if (hotspotActiveRef.current) {
-                hotspotActiveRef.current = false
-                const hotspot = wifiHotspotModule()
-                if (hotspot) void hotspot.stopHotspot().catch(() => {})
-            }
-        }
-    }, [])
 
     // Shared by the initial detect (onStartHost) and the manual "Retry" in the QR sheet.
     const detectAndSetHostIp = async () => {
@@ -501,6 +521,7 @@ const HelixMeshScreen = () => {
     const stopHotspotIfActive = () => {
         if (!hotspotActiveRef.current) return
         hotspotActiveRef.current = false
+        liveHotspotActive = false
         setHostQrExtra('')
         const hotspot = wifiHotspotModule()
         if (hotspot) void hotspot.stopHotspot().catch(() => {})
@@ -528,6 +549,7 @@ const HelixMeshScreen = () => {
                 const creds = await hotspot.startHotspot()
                 hotspotStarted = true
                 hotspotActiveRef.current = true
+                liveHotspotActive = true
                 // The native side now returns '' rather than guessing when the AP interface has no
                 // address yet — falling back to ordinary detection here beats advertising a
                 // constant that may not be this device's actual hotspot address. Getting this
@@ -550,6 +572,7 @@ const HelixMeshScreen = () => {
             })
             await coord.listen(HOST_PORT, '0.0.0.0')
             coordRef.current = coord
+            liveCoord = coord
             offerLoadedModel(coord, transferOn)
             setHosting(true)
             setHostAgents([])
@@ -565,6 +588,7 @@ const HelixMeshScreen = () => {
         } catch (e) {
             coordRef.current?.close()
             coordRef.current = null
+        liveCoord = null
             if (hotspotStarted) stopHotspotIfActive()
             Logger.errorToast(`Host start failed: ${e instanceof Error ? e.message : String(e)}`)
         } finally {
@@ -575,6 +599,7 @@ const HelixMeshScreen = () => {
     const onStopHost = () => {
         coordRef.current?.close()
         coordRef.current = null
+        liveCoord = null
         setHosting(false)
         setHostAgents([])
         stopHotspotIfActive()
@@ -1042,6 +1067,7 @@ const HelixMeshScreen = () => {
                                     return
                                 }
                                 joinedHotspotRef.current = true
+                                liveAgentJoinedHotspot = true
                                 // Trust the network over the QR code. The gateway of a hotspot IS
                                 // the phone serving it, read from the DHCP lease we just took,
                                 // whereas the address in the code is only what the host BELIEVED

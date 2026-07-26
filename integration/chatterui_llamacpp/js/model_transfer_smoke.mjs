@@ -112,6 +112,41 @@ async function main() {
     const offBytes = await get(port, '/model')
     check(offBytes.status === 404, 'and the bytes are not served either')
 
+    // --- a record whose size is 0 must not become an offer of 0 bytes ---
+    // The app's own model rows allow file_size = 0: statting is non-fatal at import and fails
+    // outright for a model linked from outside the app (a content:// path). Serving that verbatim
+    // announced a zero-length file, which the joining phone then discarded as "no model offered" —
+    // a serveable model looking like no model at all.
+    {
+        let resolved = 0
+        model.current = {
+            name: NAME,
+            size: 0,
+            readBase64: served.readBase64,
+            async resolveSize() {
+                resolved++
+                return FILE.length
+            },
+        }
+        const info = await get(port, '/model/info')
+        const offer = JSON.parse(info.body.toString())
+        check(offer.size === FILE.length, 'an unknown recorded size is resolved from the file itself')
+        check(resolved > 0, 'resolveSize() is what supplied it')
+
+        const body = await get(port, '/model')
+        check(body.status === 200 && body.body.length === FILE.length,
+            'the bytes still stream correctly when the size had to be resolved')
+    }
+
+    // --- and if the size genuinely cannot be determined, say so rather than send an empty body ---
+    {
+        model.current = { name: NAME, size: 0, readBase64: served.readBase64, async resolveSize() { return 0 } }
+        const info = await get(port, '/model/info')
+        check(JSON.parse(info.body.toString()).size === 0, 'an unresolvable size is reported as 0')
+        const body = await get(port, '/model')
+        check(body.status === 500, 'and the byte route refuses rather than serving a zero-length model')
+    }
+
     // --- unrelated paths still 404 rather than hanging the socket ---
     model.current = served
     const other = await get(port, '/nope')

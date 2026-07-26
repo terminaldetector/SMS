@@ -21,6 +21,12 @@ export interface ServedModel {
     size: number
     /** Bytes [offset, offset+length) as base64 — the form the socket writes without re-encoding. */
     readBase64(offset: number, length: number): Promise<string>
+    /**
+     * Optional: work out the real size when `size` is 0, which the app's own model records allow
+     * (statting is non-fatal at import, and fails outright for an externally linked content:// URI).
+     * Called before answering, so an offer never goes out claiming a length it does not know.
+     */
+    resolveSize?(): Promise<number>
 }
 
 export interface ModelOffer {
@@ -62,19 +68,32 @@ export async function handleModelRequest(
         res.send(404, { 'Content-Type': 'application/json' }, JSON.stringify({ error: 'no model offered' }))
         return true
     }
+    // Resolved once per request rather than trusted from the record, which is allowed to say 0.
+    const size = model.size > 0 ? model.size : ((await model.resolveSize?.()) ?? 0)
     if (path === '/model/info') {
-        const offer: ModelOffer = { name: model.name, size: model.size }
+        const offer: ModelOffer = { name: model.name, size }
         res.send(200, { 'Content-Type': 'application/json' }, JSON.stringify(offer))
         return true
     }
 
-    const range = parseRange(req.headers['range'], model.size)
+    const range = parseRange(req.headers['range'], size)
     if (req.headers['range'] && !range) {
-        res.send(416, { 'Content-Range': `bytes */${model.size}` })
+        res.send(416, { 'Content-Range': `bytes */${size}` })
+        return true
+    }
+    // Nothing can be streamed without a length — Content-Length has to be right, and a range has
+    // nothing to clamp against. Saying so beats sending a 200 with a body of zero bytes, which the
+    // other end would import as a broken model.
+    if (size <= 0) {
+        res.send(
+            500,
+            { 'Content-Type': 'application/json' },
+            JSON.stringify({ error: 'the host cannot determine its model file size' })
+        )
         return true
     }
     const start = range ? range.start : 0
-    const end = range ? range.end : model.size - 1
+    const end = range ? range.end : size - 1
     const length = end - start + 1
 
     res.beginStream(range ? 206 : 200, {
@@ -82,7 +101,7 @@ export async function handleModelRequest(
         'Content-Length': String(length),
         'Accept-Ranges': 'bytes',
         'Content-Disposition': `attachment; filename="${model.name}"`,
-        ...(range ? { 'Content-Range': `bytes ${start}-${end}/${model.size}` } : {}),
+        ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
     })
 
     // HEAD is not worth a branch: no client here sends one, and a body on a HEAD would be worse
