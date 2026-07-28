@@ -31,6 +31,7 @@ import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
 import DropdownSheet from '@components/input/DropdownSheet'
 import HelixQrSheet from '@components/views/HelixQrSheet'
+import MeshChatPanel from './MeshChatPanel'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
@@ -61,18 +62,20 @@ const USE_HOTSPOT_KEY = 'helix-mesh-use-hotspot'
 // Leaving this implicit is what let a phone stock-load an entire GGUF it could not hold, thrash
 // at seconds per token, then fall over and stop counting as connected.
 //
-//   'local'   Non-network. The stock app: one model, wholly in this phone's memory, no mesh.
-//   'pointer' The whole model loads here, and this phone answers as an agent alongside others
-//             that have done the same. Several complete models cooperating.
-//   'sharder' The model is NOT loaded whole anywhere. Its details are read first, then only the
-//             layers a device's free memory can actually carry. This is what makes a model too
-//             big for any single phone runnable at all.
+//   'hybrid'  Placeholder. Reserved for a mode that mixes the two below; nothing is wired to it
+//             yet, and it deliberately does nothing rather than pretending to.
+//   'pointer' Track A, per POINTER_protocol.md: whole agents exchanging results, not tensors. The
+//             model loads complete here and this phone answers as one agent among several.
+//   'sharder' Track B: the model is NOT loaded whole anywhere. Its details are read first, then
+//             only the layers a device's free memory can carry — which is what makes a model too
+//             big for any single phone runnable at all. A different mechanism entirely, not a
+//             setting layered on top of Pointer.
 const MESH_MODE_KEY = 'helix-mesh-mode'
 // The model the MESH works with, kept apart from whatever Models happens to have loaded.
 // Sharder never loads it here, so it cannot be inferred from the loaded context the way the
 // rest of the app does — it has to be remembered explicitly.
 const MESH_MODEL_KEY = 'helix-mesh-model-file'
-type MeshMode = 'local' | 'pointer' | 'sharder'
+type MeshMode = 'hybrid' | 'pointer' | 'sharder'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
@@ -345,10 +348,7 @@ const HelixMeshScreen = () => {
     // QR still shows (nothing to hunt for) with a note that it may be stale.
     const [hostIpIsStale, setHostIpIsStale] = useState(false)
     const [hostAgents, setHostAgents] = useState<string[]>([])
-    const [hostPrompt, setHostPrompt] = useState('')
     const [hostMode, setHostMode] = useState<HostMode>('single')
-    const [hostRunning, setHostRunning] = useState(false)
-    const [hostResult, setHostResult] = useState('')
     const coordRef = useRef<HelixCoordinator | null>(liveCoord)
 
     // Direct Wi-Fi hotspot ("fast connect"): the query string this session's QR appends after
@@ -379,7 +379,7 @@ const HelixMeshScreen = () => {
     const [hostMemory, setHostMemory] = useState<DeviceMemory>(() => deviceMemory())
     const [meshModeRaw, setMeshMode] = useMMKVString(MESH_MODE_KEY)
     const meshMode: MeshMode =
-        meshModeRaw === 'sharder' ? 'sharder' : meshModeRaw === 'pointer' ? 'pointer' : 'local'
+        meshModeRaw === 'sharder' ? 'sharder' : meshModeRaw === 'pointer' ? 'pointer' : 'hybrid'
     // Everything that used to ask "is this phone sharding?" still means exactly that.
     const role: 'full' | 'shard' = meshMode === 'sharder' ? 'shard' : 'full'
     const loadedSharded = Llama.useLlamaModelStore((state) => state.sharded)
@@ -764,28 +764,6 @@ const HelixMeshScreen = () => {
         Logger.infoToast('Stopped hosting')
     }
 
-    const onRunHost = async () => {
-        const coord = coordRef.current
-        if (!coord) return
-        if (!hostPrompt.trim()) {
-            Logger.errorToast('Enter a prompt')
-            return
-        }
-        if (coord.agents().length === 0) {
-            Logger.errorToast('No device has joined the mesh yet')
-            return
-        }
-        setHostRunning(true)
-        setHostResult('')
-        try {
-            setHostResult(await coord.infer(hostPrompt, hostMode))
-        } catch (e) {
-            Logger.errorToast(`Run failed: ${e instanceof Error ? e.message : String(e)}`)
-        } finally {
-            setHostRunning(false)
-        }
-    }
-
     // Worker side: run llama.cpp's rpc-server on this phone and tell the coordinator it can hold
     // layers (address + RAM). There is no stop API for the server — once started it serves for the
     // process's lifetime — so this is a one-way switch, and the UI says so.
@@ -935,16 +913,16 @@ const HelixMeshScreen = () => {
                 selected={meshMode}
                 onPress={(v) => setMeshMode(v)}
                 values={[
-                    { label: 'Local', value: 'local' },
+                    { label: 'Hybrid', value: 'hybrid' },
                     { label: 'Pointer', value: 'pointer' },
                     { label: 'Sharder', value: 'sharder' },
                 ]}
             />
             <Text style={[styles.dim, styles.gap]}>
-                {meshMode === 'local'
-                    ? 'Non-network. One model, loaded whole on this phone, nothing shared — the app as it ships. Everything else on this screen is off.'
+                {meshMode === 'hybrid'
+                    ? 'Placeholder — reserved for mixing the two modes below. Nothing is wired to it yet, so it does nothing rather than pretend to. Use the app normally; pick a mode below to mesh.'
                     : meshMode === 'pointer'
-                      ? 'This phone loads its model in full and answers as an agent, alongside other phones that have done the same. Several complete models cooperating — each still has to fit on its own phone.'
+                      ? 'Track A. Whole agents exchanging results, not tensors: this phone loads its model in full and answers as one agent among several. Each model still has to fit on its own phone.'
                       : "The model is never loaded whole. Its details are read first, then only the layers each phone's free memory can carry. This is what makes a model too big for any single phone runnable at all."}
             </Text>
             {meshMode === 'sharder' && (
@@ -954,13 +932,13 @@ const HelixMeshScreen = () => {
                 </Text>
             )}
 
-            {meshMode === 'local' && (
+            {meshMode === 'hybrid' && (
                 <Text style={[styles.dim, styles.gap]}>
                     Pick Pointer or Sharder above to use this phone with others.
                 </Text>
             )}
 
-            {meshMode !== 'local' && (
+            {meshMode !== 'hybrid' && (
                 <>
             {/* The mesh's own loader. Sending people to Models to prepare a mesh model is what
                 produced the accidental full load every time: that screen only knows one way to
@@ -1176,37 +1154,20 @@ const HelixMeshScreen = () => {
                             )}
                         </View>
 
-                        <ThemedTextInput
-                            label="Prompt"
-                            value={hostPrompt}
-                            onChangeText={setHostPrompt}
-                            placeholder="Ask the other phone's model…"
-                            multiline
-                            numberOfLines={3}
-                            containerStyle={styles.gap}
-                        />
-                        <HorizontalSelector
-                            label="Mode"
-                            selected={hostMode}
-                            onPress={setHostMode}
-                            style={styles.gap}
-                            values={[
-                                { label: 'Single', value: 'single' },
-                                { label: 'Voting', value: 'voting' },
-                            ]}
-                        />
-                        <ThemedButton
-                            label="Run on mesh"
-                            variant="primary"
-                            onPress={onRunHost}
-                            buttonStyle={styles.gap}
-                        />
-                        {hostRunning && <ActivityIndicator color={color.text._100} style={styles.gap} />}
-                        {!!hostResult && (
-                            <View style={styles.resultBox}>
-                                <Text style={styles.section}>Result</Text>
-                                <Text style={styles.result}>{hostResult}</Text>
-                            </View>
+                        {/* Asking a joined phone something now lives in the Pointer test chat
+                            below, which is the mode that actually does this. What stays here is
+                            how the answer is decided when there is more than one agent. */}
+                        {meshMode === 'pointer' && (
+                            <HorizontalSelector
+                                label="How the mesh answers"
+                                selected={hostMode}
+                                onPress={setHostMode}
+                                style={styles.gap}
+                                values={[
+                                    { label: 'Single', value: 'single' },
+                                    { label: 'Voting', value: 'voting' },
+                                ]}
+                            />
                         )}
                     </View>
                 )}
@@ -1335,13 +1296,11 @@ const HelixMeshScreen = () => {
                                 <Text style={styles.section}>Layer split</Text>
                                 <Text style={styles.result}>{shardPlan}</Text>
                                 {/* The sharded model replaces this phone's own loaded model, so it
-                                    is already what every chat uses — but nothing said so, and the
-                                    "Run on mesh" box above is a different mode entirely (it asks
-                                    ANOTHER phone's model to answer), which just times out here. */}
+                                    is already what every chat uses — worth saying, since nothing
+                                    else on this screen implies it. */}
                                 <Text style={[styles.dim, styles.gap]}>
-                                    This is now this phone's model — open any chat and it runs across
-                                    the phones above. "Run on mesh" is for something else: asking
-                                    another phone's own model to answer.
+                                    This is now this phone's model — the test chat below runs on it,
+                                    and so does any ordinary chat.
                                 </Text>
                                 <ThemedButton
                                     label="Open chat"
@@ -1354,6 +1313,56 @@ const HelixMeshScreen = () => {
                     </>
                 )}
             </View>
+            )}
+
+            {/* One test chat per mode, wired to that mode's own path — Pointer asks another
+                phone's whole model through the coordinator, Sharder runs this phone's split one
+                directly. Hybrid gets none: it is a placeholder with nothing behind it. */}
+            {meshMode === 'pointer' && (
+                <MeshChatPanel
+                    title="Test chat — Pointer"
+                    hint="Sends the prompt to a joined phone and shows what its model answers. Track A: whole agents exchanging results."
+                    disabledReason={
+                        !hosting
+                            ? 'Start hosting above, and have the other phone join, to test this.'
+                            : hostAgents.length === 0
+                              ? 'No device has joined the mesh yet.'
+                              : undefined
+                    }
+                    onSend={async (text) => {
+                        const coord = coordRef.current
+                        if (!coord) throw new Error('not hosting')
+                        return await coord.infer(text, hostMode)
+                    }}
+                />
+            )}
+
+            {meshMode === 'sharder' && (
+                <MeshChatPanel
+                    title="Test chat — Sharder"
+                    hint="Runs on the model split across the phones above. Streams as it goes, so the first token tells you the ring is alive."
+                    disabledReason={
+                        !loadedContext
+                            ? 'Nothing is loaded yet — start the shard above first.'
+                            : !loadedSharded
+                              ? 'The model here is loaded whole, not split. Start the shard above to test the mesh.'
+                              : undefined
+                    }
+                    onSend={async (text, onToken) => {
+                        const store = Llama.useLlamaModelStore.getState()
+                        if (!store.context) throw new Error('no model loaded')
+                        let out = ''
+                        await store.completion(
+                            { prompt: text, n_predict: 256 },
+                            (t: string) => {
+                                out += t
+                                onToken(t)
+                            },
+                            () => {}
+                        )
+                        return out.trim() || '(empty answer)'
+                    }}
+                />
             )}
                 </>
             )}
