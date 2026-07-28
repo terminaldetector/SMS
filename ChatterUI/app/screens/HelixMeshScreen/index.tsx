@@ -38,6 +38,13 @@ import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { meshSession, MeshMode } from '@lib/helixSession'
+import {
+    HelixKeys,
+    helixMemoryFraction,
+    helixPort,
+    helixRpcPort,
+    helixSecret,
+} from '@lib/helixSettings'
 import { encodeHotspotQuery, parseScannedAddress, withHost } from '@lib/helixHotspot'
 import { httpBaseFromHost, servedModelFromFile, syncModelFromHost } from '@lib/helixModelSync'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
@@ -77,16 +84,9 @@ const MESH_MODE_KEY = 'helix-mesh-mode'
 // Sharder never loads it here, so it cannot be inferred from the loaded context the way the
 // rest of the app does — it has to be remembered explicitly.
 const MESH_MODEL_KEY = 'helix-mesh-model-file'
-// Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
-// also matches the PC demo (helix/host/agent_host_ws_demo.py).
-const AGENT_SECRET = 'helix-agent-host-ws-demo'
-const HOST_PORT = 8790
 // The ELIZA easter egg: eight taps on Pointer, each within this window of the last.
 const POINTER_TAPS_FOR_ELIZA = 8
 const POINTER_TAP_WINDOW_MS = 1500
-// llama.cpp's rpc-server port on each shard worker. Fixed: every phone runs one server, and the
-// address is announced, so there is nothing to configure.
-const RPC_PORT = 50052
 type HostMode = 'single' | 'voting'
 
 // A mesh session belongs to the app, not to this screen being on top.
@@ -130,10 +130,11 @@ function deviceMemory(): DeviceMemory {
         const info = require('../../../modules/bitchat-ble').BitchatBle?.getMemoryInfo?.()
         if (info && Number(info.available) > 0) {
             const headroom = Number(info.available) - Number(info.threshold ?? 0)
-            // Two thirds of the remaining headroom: weights are not the only thing that grows
+            // Only a fraction of the remaining headroom: weights are not the only thing that grows
             // during inference (KV cache, compute buffers), and being killed mid-answer is worse
-            // than taking one layer fewer.
-            const usable = Math.max(0, Math.floor(headroom * 0.66))
+            // than taking one layer fewer. How large a fraction is the Settings knob — two thirds
+            // by default, since the right answer depends on what else the phone is doing.
+            const usable = Math.max(0, Math.floor(headroom * helixMemoryFraction()))
             return { total: Number(info.total) || total, usable, low: !!info.low }
         }
     } catch {
@@ -296,7 +297,9 @@ function normalizeWs(input: string): string {
     let s = (input || '').trim().replace(/\/+$/, '')
     if (!s) return ''
     if (!/^wss?:\/\//i.test(s)) s = 'ws://' + s
-    if (!/:\d+/.test(s.replace(/^wss?:\/\//i, ''))) s = s + ':8790'
+    // A bare IP means "the port this build hosts on" — if the mesh port was changed, an address
+    // typed without one has to follow it, or joining silently aims at the old port.
+    if (!/:\d+/.test(s.replace(/^wss?:\/\//i, ''))) s = s + ':' + helixPort()
     return s
 }
 
@@ -323,6 +326,13 @@ const HelixMeshScreen = () => {
     // reconnects, and the UI should say so rather than keep claiming "online".
     const [agentOnline, setAgentOnline] = useState(meshSession.agentOnline)
     const [showQrSheet, setShowQrSheet] = useState(false)
+    // Ports live in Settings now. Subscribed to rather than read once, so changing one updates what
+    // this screen tells people to connect to — a stale port in the QR is a connection that never
+    // arrives with nothing on screen explaining why. A mesh already hosting keeps the port it bound.
+    const [portRaw] = useMMKVString(HelixKeys.port)
+    const [rpcPortRaw] = useMMKVString(HelixKeys.rpcPort)
+    const meshPort = useMemo(() => helixPort(), [portRaw])
+    const rpcPort = useMemo(() => helixRpcPort(), [rpcPortRaw])
     // The ELIZA joke, hidden behind eight taps on Pointer. The count is a ref, not state: nothing
     // on screen should react to it — a counter that made the UI twitch would stop being hidden.
     const [showEliza, setShowEliza] = useState(false)
@@ -494,7 +504,7 @@ const HelixMeshScreen = () => {
                 // the host "answers prompts, but don't place layers here".
                 ...(shardRpcAddr ? { rpc: shardRpcAddr } : {}),
             })
-            const node = new HelixAgentNode(agentId, AGENT_SECRET, runner, {
+            const node = new HelixAgentNode(agentId, helixSecret(), runner, {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
             })
             node.onStateChange = (v) => {
@@ -735,10 +745,10 @@ const HelixMeshScreen = () => {
                 }
             }
 
-            const coord = new HelixCoordinator(`host-${agentId}`, AGENT_SECRET, {
+            const coord = new HelixCoordinator(`host-${agentId}`, helixSecret(), {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
             })
-            await coord.listen(HOST_PORT, '0.0.0.0')
+            await coord.listen(meshPort, '0.0.0.0')
             coordRef.current = coord
             meshSession.coord = coord
             offerLoadedModel(coord, transferOn)
@@ -750,8 +760,8 @@ const HelixMeshScreen = () => {
             }
             Logger.infoToast(
                 hotspotOn
-                    ? `Hosting a direct Wi-Fi hotspot on :${HOST_PORT} — scan to join, no router needed`
-                    : `Hosting on :${HOST_PORT} — other phone joins this device`
+                    ? `Hosting a direct Wi-Fi hotspot on :${meshPort} — scan to join, no router needed`
+                    : `Hosting on :${meshPort} — other phone joins this device`
             )
         } catch (e) {
             coordRef.current?.close()
@@ -786,16 +796,16 @@ const HelixMeshScreen = () => {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const { startRpcServer } = require('cui-llama.rn')
-            const ok = await startRpcServer(`0.0.0.0:${RPC_PORT}`)
+            const ok = await startRpcServer(`0.0.0.0:${rpcPort}`)
             if (!ok) {
                 // The native side only answers false for two reasons: this build has no RPC
                 // backend compiled in, or the backend registry offered no local device to serve.
                 Logger.errorToast(
-                    `Could not start the shard worker on :${RPC_PORT} — this build has no RPC backend`
+                    `Could not start the shard worker on :${rpcPort} — this build has no RPC backend`
                 )
                 return
             }
-            const addr = `${ip}:${RPC_PORT}`
+            const addr = `${ip}:${rpcPort}`
             setShardRpcAddr(addr)
             // Announce it so the host can place layers here. If we've already joined, patch the
             // live card; otherwise onJoinAgent picks it up when joining.
@@ -839,7 +849,7 @@ const HelixMeshScreen = () => {
             }
             const plan = planLocalShard(
                 { model_id: model.name, n_layers: nLayers, model_bytes: model.file_size },
-                { id: `host-${agentId}`, mem: deviceMemory().usable, rpc: `${hostIp}:${RPC_PORT}` },
+                { id: `host-${agentId}`, mem: deviceMemory().usable, rpc: `${hostIp}:${rpcPort}` },
                 coord.agentInfo()
             )
             setShardPlan(
@@ -1149,9 +1159,9 @@ const HelixMeshScreen = () => {
                             </Text>
                         </View>
                         <Text style={[styles.node, styles.gap]}>
-                            ● hosting on port {HOST_PORT}
+                            ● hosting on port {meshPort}
                             {hostIp
-                                ? ` — other phone joins ${hostIp}:${HOST_PORT}${transportLabel(hostIpTransport)}`
+                                ? ` — other phone joins ${hostIp}:${meshPort}${transportLabel(hostIpTransport)}`
                                 : ''}
                         </Text>
                         <Text style={styles.dim}>
@@ -1213,7 +1223,7 @@ const HelixMeshScreen = () => {
                     label="Coordinator (ws host:port)"
                     value={wsUrl ?? ''}
                     onChangeText={setWsUrl}
-                    placeholder="192.168.1.10:8790"
+                    placeholder={`192.168.1.10:${meshPort}`}
                     autoCapitalize="none"
                     autoCorrect={false}
                     containerStyle={styles.gap}
@@ -1402,7 +1412,7 @@ const HelixMeshScreen = () => {
                 hosting={hosting}
                 hostStarting={hostStarting}
                 hostIp={hostIp}
-                hostPort={HOST_PORT}
+                hostPort={meshPort}
                 hostIpIsStale={hostIpIsStale}
                 hostQrExtra={hostQrExtra}
                 agentsJoined={hostAgents.length}
@@ -1477,7 +1487,7 @@ const HelixMeshScreen = () => {
 
             <Text style={styles.help}>
                 No PC: one phone taps "Start hosting", the other loads a model — either scans the
-                host's QR (tap the QR icon, top right) or types its IP:{HOST_PORT} into "Join as
+                host's QR (tap the QR icon, top right) or types its IP:{meshPort} into "Join as
                 agent". Both on the same Wi-Fi.{'\n\n'}
                 With a PC in the same Wi-Fi: {'\n'}
                 • L1 (drive the mesh): python -m helix.host.http_control --host 0.0.0.0{'\n'}
