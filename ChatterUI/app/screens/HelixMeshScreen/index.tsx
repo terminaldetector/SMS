@@ -29,6 +29,7 @@ import ThemedSwitch from '@components/input/ThemedSwitch'
 import ThemedTextInput from '@components/input/ThemedTextInput'
 import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
+import DropdownSheet from '@components/input/DropdownSheet'
 import HelixQrSheet from '@components/views/HelixQrSheet'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { planLocalShard } from '@lib/helixRpc'
@@ -41,6 +42,8 @@ import { Model } from '@lib/engine/Local/Model'
 import { Logger } from '@lib/state/Logger'
 import { mmkv } from '@lib/storage/MMKV'
 import { Theme } from '@lib/theme/ThemeManager'
+import { readableFileSize } from '@lib/utils/File'
+import { ModelDataType } from 'db/schema'
 
 const HOST_KEY = 'helix-mesh-host'
 const WS_KEY = 'helix-agent-ws'
@@ -65,6 +68,10 @@ const USE_HOTSPOT_KEY = 'helix-mesh-use-hotspot'
 //             layers a device's free memory can actually carry. This is what makes a model too
 //             big for any single phone runnable at all.
 const MESH_MODE_KEY = 'helix-mesh-mode'
+// The model the MESH works with, kept apart from whatever Models happens to have loaded.
+// Sharder never loads it here, so it cannot be inferred from the loaded context the way the
+// rest of the app does — it has to be remembered explicitly.
+const MESH_MODEL_KEY = 'helix-mesh-model-file'
 type MeshMode = 'local' | 'pointer' | 'sharder'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
@@ -362,6 +369,11 @@ const HelixMeshScreen = () => {
     const [shardRpcAddr, setShardRpcAddr] = useState('')
     const [shardStarting, setShardStarting] = useState(false)
     const [shardPlan, setShardPlan] = useState('')
+    // The mesh's own model picker: the trip to Models is exactly where a phone meant to shard
+    // ended up stock-loading a whole GGUF instead, so both modes choose from here now.
+    const [meshModelFile, setMeshModelFile] = useMMKVString(MESH_MODEL_KEY)
+    const [models, setModels] = useState<ModelDataType[]>([])
+    const [modelBusy, setModelBusy] = useState(false)
     // Re-read while the screen is open: free memory is a moving figure, and it is the number
     // the split will actually be computed from.
     const [hostMemory, setHostMemory] = useState<DeviceMemory>(() => deviceMemory())
@@ -417,6 +429,9 @@ const HelixMeshScreen = () => {
         if (store.context) return
         const row = (await Model.getModelListQuery()).find((m) => m.file === t.offer.name)
         if (!row) return
+        // It just arrived, so make it the mesh's model and get it into the picker.
+        setMeshModelFile(row.file)
+        void refreshModels()
         // Honour the role. On a phone set to shard, loading the transferred model in full here
         // would take the memory the shard is about to need — the very thing that had a worker
         // thrash and then drop out. It is registered and ready; the host's shard will place it.
@@ -541,6 +556,51 @@ const HelixMeshScreen = () => {
         return () => clearInterval(t)
     }, [])
 
+    // The mesh's model list, refreshed when the screen opens and after a transfer lands.
+    const refreshModels = async () => {
+        try {
+            setModels(await Model.getModelListQuery())
+        } catch (e) {
+            Logger.warn(`Could not list models: ${e}`)
+        }
+    }
+    useEffect(() => {
+        void refreshModels()
+    }, [])
+
+    const meshModel = useMemo(
+        () => models.find((m) => m.file === meshModelFile),
+        [models, meshModelFile]
+    )
+
+    // Pointer wants it resident; Sharder must NOT load it here — the split load does that, and
+    // loading it whole first is the thing that ate the memory the shard then needed.
+    const onLoadMeshModel = async () => {
+        if (!meshModel) {
+            Logger.errorToast('Pick a model first')
+            return
+        }
+        setModelBusy(true)
+        try {
+            const store = Llama.useLlamaModelStore.getState()
+            if (store.context) await store.unload()
+            await store.load(meshModel)
+        } catch (e) {
+            Logger.errorToast(`Load failed: ${e instanceof Error ? e.message : String(e)}`)
+        } finally {
+            setModelBusy(false)
+        }
+    }
+
+    const onUnloadMeshModel = async () => {
+        setModelBusy(true)
+        try {
+            await Llama.useLlamaModelStore.getState().unload()
+        } finally {
+            setModelBusy(false)
+        }
+    }
+
     // Poll the coordinator's joined agents while hosting.
     useEffect(() => {
         if (!hosting) return
@@ -581,11 +641,13 @@ const HelixMeshScreen = () => {
         }
     }
 
-    // Point the coordinator at this phone's loaded GGUF so a joining phone can pull it instead of
-    // being sent the file by hand. Only the loaded model is offered: it is unambiguously the one
-    // this mesh session is about, and it is the one already known to exist on disk.
+    // Point the coordinator at the GGUF a joining phone should pull, instead of it being sent by
+    // hand. The MESH's chosen model comes first and the loaded one is only a fallback: in Sharder
+    // mode nothing is ever loaded here, so keying this off the loaded model would have the host
+    // silently offer nothing and every joiner get a 404 — the same dead end as before, reintroduced
+    // by the mode that needs the transfer most.
     const offerLoadedModel = (coord: HelixCoordinator, enabled: boolean) => {
-        const model = Llama.useLlamaModelStore.getState().model
+        const model = meshModel ?? Llama.useLlamaModelStore.getState().model
         coord.offerModel(
             enabled && model ? servedModelFromFile(model.file_path, model.file, model.file_size) : null
         )
@@ -599,7 +661,7 @@ const HelixMeshScreen = () => {
     // for, one phone having the file and the other not.
     useEffect(() => {
         if (coordRef.current && hosting) offerLoadedModel(coordRef.current, transferOn)
-    }, [transferOn, hosting, loadedModel])
+    }, [transferOn, hosting, loadedModel, meshModel])
 
     const stopHotspotIfActive = () => {
         if (!hotspotActiveRef.current) return
@@ -767,10 +829,12 @@ const HelixMeshScreen = () => {
         // first, only to be unloaded a moment later and re-loaded split — the exact "loads
         // everything up front" behaviour sharding exists to avoid, inherited from the ordinary
         // single-device path. A model that has merely been chosen before is enough.
+        // The mesh's own choice comes first; the loaded/last model is only a fallback for a
+        // session that never used the picker.
         const store = Llama.useLlamaModelStore.getState()
-        const model = store.model ?? Llama.useLlamaPreferencesStore.getState().lastModel
+        const model = meshModel ?? store.model ?? Llama.useLlamaPreferencesStore.getState().lastModel
         if (!model) {
-            Logger.errorToast('Pick the model to shard in Models first — it does not need loading')
+            Logger.errorToast('Pick the model for the mesh above — it does not need loading')
             return
         }
         if (!hostIp) {
@@ -898,6 +962,69 @@ const HelixMeshScreen = () => {
 
             {meshMode !== 'local' && (
                 <>
+            {/* The mesh's own loader. Sending people to Models to prepare a mesh model is what
+                produced the accidental full load every time: that screen only knows one way to
+                load, and for Sharder it is the wrong one. Here the button does what the chosen
+                mode actually needs. */}
+            <View style={styles.agentBox}>
+                <Text style={styles.section}>Model for the mesh</Text>
+                <DropdownSheet
+                    data={models}
+                    selected={meshModel}
+                    onChangeValue={(m) => setMeshModelFile(m.file)}
+                    labelExtractor={(m) => m.name || m.file}
+                    placeholder="Pick a model…"
+                    modalTitle="Model for the mesh"
+                    search
+                    containerStyle={styles.gap}
+                />
+                {!!meshModel && (
+                    <Text style={styles.dim}>
+                        {`${meshModel.file} · ${meshModel.params ?? '?'} · ${
+                            meshModel.file_size > 0 ? readableFileSize(meshModel.file_size) : 'size unknown'
+                        }`}
+                    </Text>
+                )}
+                {models.length === 0 && (
+                    <Text style={styles.dim}>
+                        No models yet — import one in Models, or let a host send you its own.
+                    </Text>
+                )}
+
+                {meshMode === 'pointer' ? (
+                    <>
+                        <ThemedButton
+                            label={
+                                modelBusy
+                                    ? 'Working…'
+                                    : loadedContext
+                                      ? 'Unload'
+                                      : 'Load into this phone'
+                            }
+                            variant={loadedContext ? 'critical' : 'primary'}
+                            onPress={loadedContext ? onUnloadMeshModel : onLoadMeshModel}
+                            buttonStyle={styles.gap}
+                        />
+                        <Text style={styles.dim}>
+                            Pointer needs the whole model resident here — this phone answers with it.
+                        </Text>
+                    </>
+                ) : (
+                    <Text style={[styles.dim, styles.gap]}>
+                        Nothing is loaded here. Sharder reads this model's details only; the layers
+                        are placed when you start the shard below.
+                    </Text>
+                )}
+                {modelBusy && <ActivityIndicator color={color.text._100} style={styles.gap} />}
+                <Text style={styles.node}>
+                    {loadedContext
+                        ? loadedSharded
+                            ? '● loaded split across the mesh'
+                            : '● loaded whole on this phone'
+                        : '○ nothing loaded on this phone'}
+                </Text>
+            </View>
+
             <ThemedTextInput
                 label="HELIX node (host:port)"
                 value={host ?? ''}
@@ -1028,9 +1155,9 @@ const HelixMeshScreen = () => {
                                 keep claiming whatever was true when hosting started. */}
                             {!transferOn
                                 ? 'Not sending the model — each phone uses its own.'
-                                : loadedModel
-                                  ? `Offering ${loadedModel.file} to phones that join`
-                                  : 'No model loaded, so there is nothing to send — load one in Models (no need to restart hosting).'}
+                                : (meshModel ?? loadedModel)
+                                  ? `Offering ${(meshModel ?? loadedModel)?.file} to phones that join`
+                                  : 'No model chosen, so there is nothing to send — pick one above (no need to restart hosting).'}
                         </Text>
                         <TouchableOpacity onPress={() => setShowQrSheet(true)}>
                             <Text style={[styles.dim, styles.gap]}>
