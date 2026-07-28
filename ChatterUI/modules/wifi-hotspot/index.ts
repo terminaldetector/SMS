@@ -64,6 +64,17 @@ export interface WifiHotspotModule {
      * a build/API level that cannot report it.
      */
     getJoinedNetworkGateway(): string
+    /** Whether this process is currently pinned to a single network (diagnostic). */
+    isProcessBoundToNetwork(): boolean
+    /**
+     * Releases the process-wide network pin set by joinHotspot. Returns whether one was in effect.
+     *
+     * Necessary before hosting: the pin applies to every socket the process owns, including
+     * listening ones, so a phone that joined someone else's hotspot earlier goes on serving only
+     * on that network — its own coordinator then looks alive locally while being unreachable from
+     * the hotspot it is itself running.
+     */
+    clearNetworkBinding(): boolean
 }
 
 // Optional on purpose, same reasoning as bitchat-ble: an APK built before this module existed must

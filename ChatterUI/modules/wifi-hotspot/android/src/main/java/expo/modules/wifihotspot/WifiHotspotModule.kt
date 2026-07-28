@@ -164,6 +164,30 @@ class WifiHotspotModule : Module() {
     Function("getJoinedNetworkGateway") {
       joinedNetworkGateway()
     }
+
+    // Whether this process is currently pinned to one network, and to which. Diagnostic only —
+    // the answer is the difference between "the host is not listening" and "the host is listening
+    // somewhere nothing can reach it", which look identical from the other phone.
+    Function("isProcessBoundToNetwork") {
+      runCatching { connectivityManager.boundNetworkForProcess != null }.getOrDefault(false)
+    }
+
+    // Releases that pin. bindProcessToNetwork() applies to EVERY socket this process owns,
+    // listening sockets included — so a phone that joined someone's hotspot earlier keeps serving
+    // only on that network afterwards, and its own coordinator becomes unreachable from its own
+    // hotspot even though it is running and says so. Hosting has to start from an unpinned
+    // process; joining pins it again on purpose.
+    Function("clearNetworkBinding") {
+      val was = runCatching { connectivityManager.boundNetworkForProcess != null }.getOrDefault(false)
+      runCatching { connectivityManager.bindProcessToNetwork(null) }
+        .onFailure { Log.w(TAG, "clearNetworkBinding threw", it) }
+      // The reference is deliberately dropped too: whatever was joined is no longer this process's
+      // network, so reporting it as still joined would be a lie the reuse path would act on.
+      joinedNetwork = null
+      joinedSsid = null
+      if (was) Log.i(TAG, "clearNetworkBinding: released a process network binding")
+      was
+    }
   }
 
   private fun granted(permission: String) =

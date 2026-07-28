@@ -531,6 +531,19 @@ const HelixMeshScreen = () => {
         setHostStarting(true)
         let hotspotStarted = false
         try {
+            // A host must not be pinned to a network it joined earlier. bindProcessToNetwork()
+            // covers every socket this process owns, listening ones included, so a phone that was
+            // an agent on someone else's hotspot before would keep serving only on that network —
+            // and its coordinator would sit there looking perfectly healthy while being unreachable
+            // from the hotspot this phone is itself running. That is exactly the shape of "0
+            // devices connected" on a host that is plainly hosting and offering a model.
+            const released = wifiHotspotModule()?.clearNetworkBinding?.() ?? false
+            if (released) {
+                Logger.info('Released the network binding left from joining — a host serves on all networks')
+                joinedHotspotRef.current = false
+                liveAgentJoinedHotspot = false
+            }
+
             if (hotspotOn) {
                 const hotspot = wifiHotspotModule()
                 if (!hotspot) throw new Error('Wi-Fi hotspot is not in this build')
@@ -1053,6 +1066,16 @@ const HelixMeshScreen = () => {
                                     "This code needs a direct Wi-Fi hotspot, which isn't in this build"
                                 )
                                 return
+                            }
+                            // The two roles genuinely conflict: joining pins this whole process to
+                            // the joined network, which is precisely what stops a coordinator of
+                            // our own from being reachable. Better to say so than to leave a host
+                            // silently serving into nowhere.
+                            if (hosting) {
+                                Logger.warnToast(
+                                    'This phone is hosting — joining another phone will make its own ' +
+                                        'mesh unreachable. Stop hosting first.'
+                                )
                             }
                             Logger.infoToast("Joining the host's Wi-Fi hotspot…")
                             try {
