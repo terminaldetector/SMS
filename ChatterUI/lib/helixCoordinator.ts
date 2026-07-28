@@ -178,7 +178,14 @@ export class HelixCoordinator {
                 }
                 await new Promise((r) => setTimeout(r, 20))
             }
-            throw new Error('infer timeout (agent did not answer)')
+            // Worth spelling out, because the commonest way to see this is not a fault at all: a
+            // phone that joined only to lend its RAM for sharding is a shard worker, not a model
+            // that answers prompts. A sharded model is used from an ordinary chat on the host,
+            // not through here.
+            throw new Error(
+                'the joined phone did not answer — it can only answer if it joined with its own ' +
+                    'model loaded. A phone lending RAM for sharding does not; chat normally instead.'
+            )
         } finally {
             this.coll.delete(tid)
         }

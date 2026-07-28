@@ -143,18 +143,54 @@ export async function syncModelFromHost(
     // to bytes we can't account for.
     if (existing.exists) await fs.deleteAsync(dest, { idempotent: true })
 
-    const task = fs.createDownloadResumable(
-        `${httpBase}/model`,
-        dest,
-        {},
-        (d: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) =>
-            onProgress({
-                received: d.totalBytesWritten,
-                total: d.totalBytesExpectedToWrite > 0 ? d.totalBytesExpectedToWrite : offer.size,
-            })
+    Logger.info(
+        `Transferring ${offer.name}` +
+            `${offer.size > 0 ? ` (${(offer.size / 1e9).toFixed(2)} GB)` : ' (size unknown)'} from the host`
     )
-    const result = await task.downloadAsync()
-    if (!result) throw new Error('transfer was cancelled')
+
+    // Retried, because this is gigabytes over a phone's own hotspot and a single blip anywhere
+    // along the way ends the whole thing. Each attempt restarts rather than resumes: the native
+    // downloader only hands back a resume token when a transfer is PAUSED, and there is none to be
+    // had after it has failed. Retrying is therefore expensive, which is why it is bounded and each
+    // attempt reports how far the last one reached instead of failing silently.
+    let lastReached = 0
+    let lastError: unknown = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        if (attempt > 1) {
+            Logger.warn(
+                `Transfer of ${offer.name} stopped after ${lastReached} bytes` +
+                    `${offer.size > 0 ? ` of ${offer.size}` : ''} — retrying (${attempt}/3)`
+            )
+            await fs.deleteAsync(dest, { idempotent: true })
+        }
+        const task = fs.createDownloadResumable(
+            `${httpBase}/model`,
+            dest,
+            {},
+            (d: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
+                lastReached = d.totalBytesWritten
+                onProgress({
+                    received: d.totalBytesWritten,
+                    total: d.totalBytesExpectedToWrite > 0 ? d.totalBytesExpectedToWrite : offer.size,
+                })
+            }
+        )
+        try {
+            const result = await task.downloadAsync()
+            if (result) {
+                lastError = null
+                break
+            }
+            lastError = new Error('transfer was cancelled')
+        } catch (e) {
+            lastError = e
+        }
+    }
+    if (lastError) {
+        await fs.deleteAsync(dest, { idempotent: true })
+        const why = lastError instanceof Error ? lastError.message : String(lastError)
+        throw new Error(`transfer failed after ${lastReached} bytes: ${why}`)
+    }
 
     const got = await fs.getInfoAsync(dest, { size: true })
     const landed = Number(got.size ?? 0)

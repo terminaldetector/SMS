@@ -8,6 +8,7 @@
 
 import { AntDesign } from '@expo/vector-icons'
 import { closeFd, getContentFd } from '@vali98/react-native-fs'
+import { useRouter } from 'expo-router'
 import * as ExpoCrypto from 'expo-crypto'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -241,6 +242,7 @@ function normalizeWs(input: string): string {
 
 const HelixMeshScreen = () => {
     const styles = useStyles()
+    const router = useRouter()
     const { color } = Theme.useTheme()
 
     const [host, setHost] = useMMKVString(HOST_KEY)
@@ -712,6 +714,8 @@ const HelixMeshScreen = () => {
             await Llama.useLlamaModelStore.getState().load(model, {
                 rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
                 tensor_split: plan.tensor_split,
+                // Without this every layer stays on this phone regardless of the split.
+                n_layers: nLayers,
             })
             Logger.infoToast(`Sharded across ${plan.ring.length} phones`)
         } catch (e) {
@@ -1033,6 +1037,21 @@ const HelixMeshScreen = () => {
                             <View style={styles.resultBox}>
                                 <Text style={styles.section}>Layer split</Text>
                                 <Text style={styles.result}>{shardPlan}</Text>
+                                {/* The sharded model replaces this phone's own loaded model, so it
+                                    is already what every chat uses — but nothing said so, and the
+                                    "Run on mesh" box above is a different mode entirely (it asks
+                                    ANOTHER phone's model to answer), which just times out here. */}
+                                <Text style={[styles.dim, styles.gap]}>
+                                    This is now this phone's model — open any chat and it runs across
+                                    the phones above. "Run on mesh" is for something else: asking
+                                    another phone's own model to answer.
+                                </Text>
+                                <ThemedButton
+                                    label="Open chat"
+                                    variant="secondary"
+                                    onPress={() => router.push('/')}
+                                    buttonStyle={styles.gap}
+                                />
                             </View>
                         )}
                     </>

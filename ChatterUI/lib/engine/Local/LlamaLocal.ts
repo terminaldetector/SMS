@@ -40,6 +40,7 @@ export type CompletionOutput = {
 export type ShardParams = {
     rpc_servers: string[] // worker "host:port" rpc-servers, ring order
     tensor_split: number[] // ratios across [this phone, worker0, worker1, …]
+    n_layers?: number // the model's block count, so every layer is eligible for placement
 }
 
 export type LlamaState = {
@@ -182,8 +183,18 @@ export namespace Llama {
                 n_threads: config.threads,
                 n_batch: config.batch,
                 ctx_shift: config.ctx_shift,
-                n_gpu_layers: config.gpu_layers,
-                use_mlock: true,
+                // llama.cpp registers each rpc-server as an OFFLOAD device, and n_gpu_layers is
+                // what decides how many layers are eligible to leave the local CPU. At the app's
+                // usual 0, none are — so tensor_split has nothing to divide and this phone loads
+                // and runs the whole model itself, which is the opposite of sharding. Every layer
+                // has to be placeable for the split to mean anything; 99 is llama.cpp's own
+                // "all of them" idiom and is clamped to the real block count.
+                n_gpu_layers: shard ? (shard.n_layers && shard.n_layers > 0 ? shard.n_layers : 99) : config.gpu_layers,
+                // mlock pins the whole file in this phone's physical RAM. That is exactly the
+                // memory a shard is meant not to need, so it stays off when sharding; mmap remains
+                // on either way, letting the tensors bound for a worker stream from the file
+                // instead of being materialised here first.
+                use_mlock: !shard,
                 use_mmap: true,
                 devices: config.devices,
                 // Present only for a sharded load: llama.cpp registers each rpc-server as a remote
