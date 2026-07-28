@@ -19,15 +19,11 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Crash stack traces can echo sensitive strings (e.g. part of a prompt); don't let them
+             ride along in cloud auto-backup. -->
+        <exclude domain="file" path="crash_logs/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="crash_logs/" />
     </device-transfer>
-    -->
 </data-extraction-rules>

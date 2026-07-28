@@ -19,6 +19,7 @@ package com.saturnmask.gallery
 import android.app.Application
 import android.app.UiModeManager
 import android.content.Context
+import com.saturnmask.gallery.common.CrashLogger
 import com.saturnmask.gallery.data.DataStoreRepository
 import com.saturnmask.gallery.notifications.NotificationScheduleManager
 import com.saturnmask.gallery.proto.Theme
@@ -35,6 +36,8 @@ class GalleryApplication : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    CrashLogger.install(this)
+
     // Initialize the notification schedule manager to load the scheduled notifications from the
     // disk.
     notificationScheduleManager.initialize()

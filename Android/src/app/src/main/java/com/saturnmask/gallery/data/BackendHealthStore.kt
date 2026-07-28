@@ -80,6 +80,13 @@ class BackendHealthStore @Inject constructor(@ApplicationContext context: Contex
   fun hadUnclearedAttempt(modelName: String, accelerator: String): Boolean =
     prefs.getBoolean(attemptingKey(modelName, accelerator), false)
 
+  /** Best-effort human-readable dump of every (model,accelerator) health flag recorded, for the
+   *  exported diagnostics bundle only — not meant for programmatic parsing. */
+  fun summarizeAll(): String =
+    prefs.all.entries
+      .joinToString("\n") { (key, value) -> "$key = $value" }
+      .ifEmpty { "(no backend health data recorded)" }
+
   private fun badKey(modelName: String, accelerator: String) = "$modelName::$accelerator::bad"
 
   private fun attemptingKey(modelName: String, accelerator: String) =

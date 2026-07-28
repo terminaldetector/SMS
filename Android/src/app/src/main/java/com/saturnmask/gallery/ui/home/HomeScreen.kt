@@ -111,6 +111,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.saturnmask.gallery.GalleryTopAppBar
 import com.saturnmask.gallery.R
+import com.saturnmask.gallery.common.exportDiagnostics
 import com.saturnmask.gallery.customtasks.agentchat.WebSearchSettingsBottomSheet
 import com.saturnmask.gallery.data.AppBarAction
 import com.saturnmask.gallery.data.AppBarActionType
@@ -362,6 +363,30 @@ fun HomeScreen(
                         )
                     ),
                 )
+              }
+              Spacer(modifier = Modifier.height(16.dp))
+              Row(modifier = Modifier.fillMaxWidth()) {
+                SquareDrawerItem(
+                  label = stringResource(R.string.drawer_export_logs_label),
+                  description = stringResource(R.string.drawer_export_logs_description),
+                  icon = Icons.Rounded.Flag,
+                  onClick = {
+                    scope.launch {
+                      drawerState.close()
+                      context.exportDiagnostics()
+                    }
+                  },
+                  modifier = Modifier.weight(1f),
+                  iconBrush =
+                    linearGradient(
+                      colors =
+                        listOf(
+                          MaterialTheme.customColors.taskBgGradientColors[2][0],
+                          MaterialTheme.customColors.taskBgGradientColors[2][1],
+                        )
+                    ),
+                )
+                Spacer(modifier = Modifier.weight(1f))
               }
             }
           }

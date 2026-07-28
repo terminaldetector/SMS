@@ -87,6 +87,10 @@
   <string name="drawer_search_provider_description" translatable="true">Configure the web search provider used by AI Chat</string>
   <string name="drawer_huggingface_label" translatable="true">HuggingFace</string>
   <string name="drawer_huggingface_description" translatable="true">Manage your HuggingFace access token</string>
+  <!-- Label for the drawer item that exports diagnostic/crash logs for bug reports. [CHAR_LIMIT=NONE] -->
+  <string name="drawer_export_logs_label" translatable="true">Export Logs</string>
+  <!-- Description for the drawer item that exports diagnostic/crash logs for bug reports. [CHAR_LIMIT=NONE] -->
+  <string name="drawer_export_logs_description" translatable="true">Save and share a diagnostics file to help report bugs</string>
   <string name="drawer_notifications_label" translatable="true">Notifications</string>
   <string name="drawer_notifications_description" translatable="true">View scheduled notifications</string>
   <string name="notifications_title" translatable="true">Notifications</string>
