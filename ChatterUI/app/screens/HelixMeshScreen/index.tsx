@@ -54,6 +54,14 @@ const MODEL_TRANSFER_KEY = 'helix-mesh-model-transfer'
 // Default OFF: unlike everything else on this screen, the native side of this one has not yet been
 // through a real-device test pass, so it should not turn on for anyone who hasn't chosen it.
 const USE_HOTSPOT_KEY = 'helix-mesh-use-hotspot'
+// What this phone's model is FOR. Sharding and ordinary use want opposite things from the
+// loader, and leaving that implicit is what let a phone stock-load an entire GGUF it cannot
+// hold — thrashing at seconds per token, then falling over and dropping out of the mesh.
+//   'full'  — the stock path: the whole model in this phone's RAM. Solo chat, or answering as
+//             an agent with a model of its own.
+//   'shard' — metadata only, then just the layers this phone's free memory can carry.
+const MESH_ROLE_KEY = 'helix-mesh-model-role'
+type MeshRole = 'full' | 'shard'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
@@ -353,6 +361,10 @@ const HelixMeshScreen = () => {
     // Re-read while the screen is open: free memory is a moving figure, and it is the number
     // the split will actually be computed from.
     const [hostMemory, setHostMemory] = useState<DeviceMemory>(() => deviceMemory())
+    const [meshRole, setMeshRole] = useMMKVString(MESH_ROLE_KEY)
+    const role: MeshRole = meshRole === 'shard' ? 'shard' : 'full'
+    const loadedSharded = Llama.useLlamaModelStore((state) => state.sharded)
+    const loadedContext = Llama.useLlamaModelStore((state) => state.context)
     const agentId = useMemo(() => {
         const k = 'helix-agent-id'
         let v = mmkv.getString(k)
@@ -397,7 +409,15 @@ const HelixMeshScreen = () => {
         const store = Llama.useLlamaModelStore.getState()
         if (store.context) return
         const row = (await Model.getModelListQuery()).find((m) => m.file === t.offer.name)
-        if (row) await store.load(row)
+        if (!row) return
+        // Honour the role. On a phone set to shard, loading the transferred model in full here
+        // would take the memory the shard is about to need — the very thing that had a worker
+        // thrash and then drop out. It is registered and ready; the host's shard will place it.
+        if (role === 'shard') {
+            Logger.info(`${t.offer.name} is ready — left unloaded, this phone is set to shard`)
+            return
+        }
+        await store.load(row)
     }
 
     // `urlOverride` lets a QR scan join immediately with the address it just read, rather than
@@ -421,7 +441,11 @@ const HelixMeshScreen = () => {
             }
         }
         const store = Llama.useLlamaModelStore.getState()
-        if (!store.context) {
+        // A phone set to shard joins to offer its MEMORY, not to answer prompts — so demanding a
+        // loaded model here was the whole trap: the only way past it was a stock full load, which
+        // then ate the memory the shard needed. Only the 'full' role, which does answer prompts
+        // with a model of its own, actually needs one.
+        if (!store.context && role !== 'shard') {
             // Distinguish "you chose not to receive a model" from "we tried and it didn't arrive".
             // The second is a fault worth chasing; the first is just how the setting is configured,
             // and showing the same message for both sent the last debugging round down the wrong
@@ -1059,6 +1083,40 @@ const HelixMeshScreen = () => {
                     Splits a model too big for one phone by layers, using llama.cpp's RPC. Every
                     phone taking part shares its RAM; the host loads the model and drives it.
                 </Text>
+
+                {/* The role has to be explicit: the two modes want opposite things from the loader,
+                    and leaving it implicit is what let a phone stock-load a whole GGUF it could not
+                    hold — seconds per token, then a crash and a device that drops out of the mesh. */}
+                <HorizontalSelector
+                    label="What this phone's model is for"
+                    selected={role}
+                    onPress={(v) => setMeshRole(v)}
+                    style={styles.gap}
+                    values={[
+                        { label: 'Full load', value: 'full' },
+                        { label: 'Sharding', value: 'shard' },
+                    ]}
+                />
+                <Text style={styles.dim}>
+                    {role === 'shard'
+                        ? 'Sharding: this phone reads only the model\'s details, then loads just the layers its free memory can carry. Do not load the model in Models — starting a shard does it, split.'
+                        : 'Full load: the whole model in this phone\'s memory, the way Models loads it. For chatting on this phone alone, or answering as an agent with your own model.'}
+                </Text>
+                {role === 'shard' && !!loadedContext && !loadedSharded && (
+                    <View style={[styles.resultBox, styles.gap]}>
+                        <Text style={styles.result}>
+                            A model is loaded here in full, holding memory that sharding needs — and
+                            it is what makes a phone thrash and then drop out of the mesh. Unload it;
+                            starting a shard loads it split instead.
+                        </Text>
+                        <ThemedButton
+                            label="Unload it"
+                            variant="critical"
+                            onPress={() => void Llama.useLlamaModelStore.getState().unload()}
+                            buttonStyle={styles.gap}
+                        />
+                    </View>
+                )}
 
                 <Text style={[styles.node, styles.gap]}>On this phone</Text>
                 {shardRpcAddr ? (

@@ -45,6 +45,8 @@ export type ShardParams = {
 
 export type LlamaState = {
     context: LlamaContext | undefined
+    /** True when `context` was loaded split across the mesh rather than wholly on this phone. */
+    sharded: boolean
     model?: ModelDataType
     mmproj?: ModelDataType
     loadProgress: number
@@ -148,6 +150,7 @@ export namespace Llama {
 
     export const useLlamaModelStore = create<LlamaState>()((set, get) => ({
         context: undefined,
+        sharded: false,
         loadProgress: 0,
         chatCount: 0,
         promptCache: undefined,
@@ -226,6 +229,7 @@ export namespace Llama {
 
             set({
                 context: llamaContext,
+                sharded: !!shard,
                 model: model,
                 chatCount: 1,
             })
@@ -275,6 +279,7 @@ export namespace Llama {
             await get().context?.release()
             set({
                 context: undefined,
+                sharded: false,
                 model: undefined,
                 mmproj: undefined,
             })
