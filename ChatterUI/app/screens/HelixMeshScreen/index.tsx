@@ -54,14 +54,18 @@ const MODEL_TRANSFER_KEY = 'helix-mesh-model-transfer'
 // Default OFF: unlike everything else on this screen, the native side of this one has not yet been
 // through a real-device test pass, so it should not turn on for anyone who hasn't chosen it.
 const USE_HOTSPOT_KEY = 'helix-mesh-use-hotspot'
-// What this phone's model is FOR. Sharding and ordinary use want opposite things from the
-// loader, and leaving that implicit is what let a phone stock-load an entire GGUF it cannot
-// hold — thrashing at seconds per token, then falling over and dropping out of the mesh.
-//   'full'  — the stock path: the whole model in this phone's RAM. Solo chat, or answering as
-//             an agent with a model of its own.
-//   'shard' — metadata only, then just the layers this phone's free memory can carry.
-const MESH_ROLE_KEY = 'helix-mesh-model-role'
-type MeshRole = 'full' | 'shard'
+// How this phone takes part, and — because the two are inseparable — how its model is loaded.
+// Leaving this implicit is what let a phone stock-load an entire GGUF it could not hold, thrash
+// at seconds per token, then fall over and stop counting as connected.
+//
+//   'local'   Non-network. The stock app: one model, wholly in this phone's memory, no mesh.
+//   'pointer' The whole model loads here, and this phone answers as an agent alongside others
+//             that have done the same. Several complete models cooperating.
+//   'sharder' The model is NOT loaded whole anywhere. Its details are read first, then only the
+//             layers a device's free memory can actually carry. This is what makes a model too
+//             big for any single phone runnable at all.
+const MESH_MODE_KEY = 'helix-mesh-mode'
+type MeshMode = 'local' | 'pointer' | 'sharder'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
@@ -361,8 +365,11 @@ const HelixMeshScreen = () => {
     // Re-read while the screen is open: free memory is a moving figure, and it is the number
     // the split will actually be computed from.
     const [hostMemory, setHostMemory] = useState<DeviceMemory>(() => deviceMemory())
-    const [meshRole, setMeshRole] = useMMKVString(MESH_ROLE_KEY)
-    const role: MeshRole = meshRole === 'shard' ? 'shard' : 'full'
+    const [meshModeRaw, setMeshMode] = useMMKVString(MESH_MODE_KEY)
+    const meshMode: MeshMode =
+        meshModeRaw === 'sharder' ? 'sharder' : meshModeRaw === 'pointer' ? 'pointer' : 'local'
+    // Everything that used to ask "is this phone sharding?" still means exactly that.
+    const role: 'full' | 'shard' = meshMode === 'sharder' ? 'shard' : 'full'
     const loadedSharded = Llama.useLlamaModelStore((state) => state.sharded)
     const loadedContext = Llama.useLlamaModelStore((state) => state.context)
     const agentId = useMemo(() => {
@@ -856,6 +863,41 @@ const HelixMeshScreen = () => {
                 )}
             />
 
+            {/* The mode decides what this phone does AND how its model is loaded — those cannot be
+                chosen separately, which is why they are one control. Everything below is shown or
+                hidden by it, so the screen only ever offers what the chosen mode can actually do. */}
+            <Text style={styles.section}>Mode</Text>
+            <HorizontalSelector
+                selected={meshMode}
+                onPress={(v) => setMeshMode(v)}
+                values={[
+                    { label: 'Local', value: 'local' },
+                    { label: 'Pointer', value: 'pointer' },
+                    { label: 'Sharder', value: 'sharder' },
+                ]}
+            />
+            <Text style={[styles.dim, styles.gap]}>
+                {meshMode === 'local'
+                    ? 'Non-network. One model, loaded whole on this phone, nothing shared — the app as it ships. Everything else on this screen is off.'
+                    : meshMode === 'pointer'
+                      ? 'This phone loads its model in full and answers as an agent, alongside other phones that have done the same. Several complete models cooperating — each still has to fit on its own phone.'
+                      : "The model is never loaded whole. Its details are read first, then only the layers each phone's free memory can carry. This is what makes a model too big for any single phone runnable at all."}
+            </Text>
+            {meshMode === 'sharder' && (
+                <Text style={styles.dim}>
+                    Do not load the model in Models — starting a shard loads it split. A phone here
+                    does not even need its own model to take part; it can lend memory alone.
+                </Text>
+            )}
+
+            {meshMode === 'local' && (
+                <Text style={[styles.dim, styles.gap]}>
+                    Pick Pointer or Sharder above to use this phone with others.
+                </Text>
+            )}
+
+            {meshMode !== 'local' && (
+                <>
             <ThemedTextInput
                 label="HELIX node (host:port)"
                 value={host ?? ''}
@@ -1077,6 +1119,7 @@ const HelixMeshScreen = () => {
                 )}
             </View>
 
+            {meshMode === 'sharder' && (
             <View style={styles.agentBox}>
                 <Text style={styles.section}>Sharding — one big model across phones</Text>
                 <Text style={styles.dim}>
@@ -1084,25 +1127,10 @@ const HelixMeshScreen = () => {
                     phone taking part shares its RAM; the host loads the model and drives it.
                 </Text>
 
-                {/* The role has to be explicit: the two modes want opposite things from the loader,
-                    and leaving it implicit is what let a phone stock-load a whole GGUF it could not
-                    hold — seconds per token, then a crash and a device that drops out of the mesh. */}
-                <HorizontalSelector
-                    label="What this phone's model is for"
-                    selected={role}
-                    onPress={(v) => setMeshRole(v)}
-                    style={styles.gap}
-                    values={[
-                        { label: 'Full load', value: 'full' },
-                        { label: 'Sharding', value: 'shard' },
-                    ]}
-                />
-                <Text style={styles.dim}>
-                    {role === 'shard'
-                        ? 'Sharding: this phone reads only the model\'s details, then loads just the layers its free memory can carry. Do not load the model in Models — starting a shard does it, split.'
-                        : 'Full load: the whole model in this phone\'s memory, the way Models loads it. For chatting on this phone alone, or answering as an agent with your own model.'}
-                </Text>
-                {role === 'shard' && !!loadedContext && !loadedSharded && (
+                {/* The mode selector at the top of the screen already chose this; what remains
+                    useful here is catching the state that actually breaks a shard — a model
+                    sitting in memory in full while this phone is meant to be sharding. */}
+                {!!loadedContext && !loadedSharded && (
                     <View style={[styles.resultBox, styles.gap]}>
                         <Text style={styles.result}>
                             A model is loaded here in full, holding memory that sharding needs — and
@@ -1199,6 +1227,9 @@ const HelixMeshScreen = () => {
                     </>
                 )}
             </View>
+            )}
+                </>
+            )}
 
             <HelixQrSheet
                 visible={showQrSheet}
