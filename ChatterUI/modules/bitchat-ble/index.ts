@@ -45,6 +45,12 @@ export interface BitchatBleModule {
      * found instead of a bare IP a user has no way to sanity-check.
      */
     getLocalIpTransport(): string
+    /**
+     * Live memory picture, for sizing what this device can hold of a shard right now. `total` is
+     * the paper figure; `available` is what is actually free; `threshold` is the level below which
+     * Android starts killing processes, so a share has to stay clear of it to survive inference.
+     */
+    getMemoryInfo(): { total: number; available: number; threshold: number; low: boolean }
     /** Plenty of chipsets scan but cannot advertise — check before promising to be reachable. */
     isPeripheralSupported(): boolean
     /** Whether the BLE runtime permissions are granted (Android 12+ wants SCAN/CONNECT/ADVERTISE). */

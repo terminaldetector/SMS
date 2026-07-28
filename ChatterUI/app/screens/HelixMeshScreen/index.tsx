@@ -89,6 +89,41 @@ function deviceTotalMemory(): number {
     }
 }
 
+export interface DeviceMemory {
+    total: number
+    /** What is genuinely free right now, already discounted by the OS's kill threshold. */
+    usable: number
+    low: boolean
+}
+
+// What this phone can actually commit to holding layers, as opposed to how much RAM it owns.
+//
+// Placement used to divide the model by TOTAL memory, which overstates every device by whatever
+// the OS and other apps are already using — so a phone was handed a share it could not hold, and
+// the model was effectively loaded whole on whoever had the bigger number. This reports live
+// availability instead, minus Android's own low-memory threshold (below which it starts killing
+// processes) and a margin, so a worker survives the inference it just agreed to take part in.
+function deviceMemory(): DeviceMemory {
+    const total = deviceTotalMemory()
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const info = require('../../../modules/bitchat-ble').BitchatBle?.getMemoryInfo?.()
+        if (info && Number(info.available) > 0) {
+            const headroom = Number(info.available) - Number(info.threshold ?? 0)
+            // Two thirds of the remaining headroom: weights are not the only thing that grows
+            // during inference (KV cache, compute buffers), and being killed mid-answer is worse
+            // than taking one layer fewer.
+            const usable = Math.max(0, Math.floor(headroom * 0.66))
+            return { total: Number(info.total) || total, usable, low: !!info.low }
+        }
+    } catch {
+        /* fall through to the paper figure below */
+    }
+    // No native module (or it could not answer): a conservative slice of total is still closer to
+    // the truth than total itself, which no device ever has free.
+    return { total, usable: Math.floor(total * 0.25), low: false }
+}
+
 // Lazily required so an APK without the module fails with a clear message rather than at import
 // time — same reasoning as bitchatService.ts's nativeBle().
 function wifiHotspotModule() {
@@ -225,6 +260,11 @@ async function getLanIp(): Promise<DetectedIp> {
     return native.ip ? native : await expoNetworkLanIp()
 }
 
+// Bytes as GB for the device panel; '?' when a figure never arrived rather than a false 0.00.
+function gb(bytes: number): string {
+    return bytes > 0 ? `${(bytes / 2 ** 30).toFixed(2)} GB` : '?'
+}
+
 function transportLabel(transport: string): string {
     if (transport === 'usb') return ' (wired)'
     if (transport === 'wifi') return ' (Wi-Fi)'
@@ -310,6 +350,9 @@ const HelixMeshScreen = () => {
     const [shardRpcAddr, setShardRpcAddr] = useState('')
     const [shardStarting, setShardStarting] = useState(false)
     const [shardPlan, setShardPlan] = useState('')
+    // Re-read while the screen is open: free memory is a moving figure, and it is the number
+    // the split will actually be computed from.
+    const [hostMemory, setHostMemory] = useState<DeviceMemory>(() => deviceMemory())
     const agentId = useMemo(() => {
         const k = 'helix-agent-id'
         let v = mmkv.getString(k)
@@ -397,7 +440,7 @@ const HelixMeshScreen = () => {
                 skills: ['chat'],
                 task_types: ['chat'],
                 models: ['local'],
-                mem: deviceTotalMemory(),
+                mem: deviceMemory().usable,
                 // Only set once this phone is actually serving layers — its absence is what tells
                 // the host "answers prompts, but don't place layers here".
                 ...(shardRpcAddr ? { rpc: shardRpcAddr } : {}),
@@ -459,6 +502,13 @@ const HelixMeshScreen = () => {
         liveHostIpTransport = hostIpTransport
         liveHostQrExtra = hostQrExtra
     }, [hostIp, hostIpTransport, hostQrExtra])
+
+    // Free memory moves as other apps come and go, and it is what the split is computed from,
+    // so the panel showing it must not be a snapshot from whenever the screen first opened.
+    useEffect(() => {
+        const t = setInterval(() => setHostMemory(deviceMemory()), 3000)
+        return () => clearInterval(t)
+    }, [])
 
     // Poll the coordinator's joined agents while hosting.
     useEffect(() => {
@@ -668,7 +718,7 @@ const HelixMeshScreen = () => {
             setShardRpcAddr(addr)
             // Announce it so the host can place layers here. If we've already joined, patch the
             // live card; otherwise onJoinAgent picks it up when joining.
-            agentRef.current?.updateCard({ rpc: addr, mem: deviceTotalMemory() })
+            agentRef.current?.updateCard({ rpc: addr, mem: deviceMemory().usable })
             Logger.infoToast(`Sharing compute — ${addr}`)
         } catch (e) {
             Logger.errorToast(`Shard worker failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -681,9 +731,15 @@ const HelixMeshScreen = () => {
     const onStartShard = async () => {
         const coord = coordRef.current
         if (!coord) return
-        const model = Llama.useLlamaModelStore.getState().model
+        // Sharding needs the model's FILE and its metadata, never the model resident in this
+        // phone's RAM. Requiring a loaded one meant the whole GGUF had to be pulled into memory
+        // first, only to be unloaded a moment later and re-loaded split — the exact "loads
+        // everything up front" behaviour sharding exists to avoid, inherited from the ordinary
+        // single-device path. A model that has merely been chosen before is enough.
+        const store = Llama.useLlamaModelStore.getState()
+        const model = store.model ?? Llama.useLlamaPreferencesStore.getState().lastModel
         if (!model) {
-            Logger.errorToast('Load the model you want to shard first (Models)')
+            Logger.errorToast('Pick the model to shard in Models first — it does not need loading')
             return
         }
         if (!hostIp) {
@@ -700,7 +756,7 @@ const HelixMeshScreen = () => {
             }
             const plan = planLocalShard(
                 { model_id: model.name, n_layers: nLayers, model_bytes: model.file_size },
-                { id: `host-${agentId}`, mem: deviceTotalMemory(), rpc: `${hostIp}:${RPC_PORT}` },
+                { id: `host-${agentId}`, mem: deviceMemory().usable, rpc: `${hostIp}:${RPC_PORT}` },
                 coord.agentInfo()
             )
             setShardPlan(
@@ -708,9 +764,12 @@ const HelixMeshScreen = () => {
                     .map((e) => `${e.role === 'main' ? 'this phone' : e.node}: layers ${e.band[0]}–${e.band[1]}`)
                     .join('\n')
             )
-            // Reload the model distributed. unload() first: load() refuses a model that's already
-            // loaded, and we're deliberately replacing the single-device context with a shared one.
-            await Llama.useLlamaModelStore.getState().unload()
+            // Only if something is actually resident: load() refuses a model that is already
+            // loaded, and a single-device context has to give up its memory before the split one
+            // asks for its share. Nothing to do when sharding straight from a chosen model, which
+            // is now the normal case.
+            if (Llama.useLlamaModelStore.getState().context)
+                await Llama.useLlamaModelStore.getState().unload()
             await Llama.useLlamaModelStore.getState().load(model, {
                 rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
                 tensor_split: plan.tensor_split,
@@ -1033,6 +1092,31 @@ const HelixMeshScreen = () => {
                             buttonStyle={styles.gap}
                         />
                         {shardStarting && <ActivityIndicator color={color.text._100} style={styles.gap} />}
+                        {/* What the mesh knows about each participant, and therefore why the split
+                            came out as it did. Shown before sharding too, since the useful moment
+                            to see a phone is short on memory is BEFORE handing it layers. */}
+                        <View style={styles.resultBox}>
+                            <Text style={styles.section}>Devices in the mesh</Text>
+                            <Text style={styles.result}>
+                                {`this phone — ${gb(hostMemory.usable)} usable of ${gb(hostMemory.total)}` +
+                                    (hostMemory.low ? '  ⚠ low memory' : '')}
+                            </Text>
+                            {hostAgents.length === 0 ? (
+                                <Text style={styles.dim}>no other phone has joined yet</Text>
+                            ) : (
+                                (coordRef.current?.agentInfo() ?? []).map((a) => (
+                                    <Text key={a.id} style={styles.result}>
+                                        {`${a.id} — ${a.mem > 0 ? `${gb(a.mem)} offered` : 'memory not reported'}` +
+                                            `${a.rpc ? `, sharing RAM at ${a.rpc}` : ', not sharing RAM'}`}
+                                    </Text>
+                                ))
+                            )}
+                            <Text style={[styles.dim, styles.gap]}>
+                                Layers are divided by what each phone can spare right now — live free
+                                memory less Android's own kill threshold — not by total RAM, which is
+                                never actually free.
+                            </Text>
+                        </View>
                         {!!shardPlan && (
                             <View style={styles.resultBox}>
                                 <Text style={styles.section}>Layer split</Text>

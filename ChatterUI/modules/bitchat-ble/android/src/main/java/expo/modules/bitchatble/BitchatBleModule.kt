@@ -2,6 +2,7 @@ package expo.modules.bitchatble
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -114,6 +115,26 @@ class BitchatBleModule : Module() {
     // because a silent wrong guess here is exactly what broke sharding before: 192.168.49.1 (the
     // phone's own hotspot subnet) was logged as if it were a normal LAN address, with nothing to
     // say it wasn't one.
+    // What this device can actually commit to a shard right now, rather than what it owns on
+    // paper. Total RAM is close to meaningless for placement: most of it is already spent on the
+    // OS and other apps, so sizing a share against it hands a phone layers it cannot hold.
+    // ActivityManager reports live availability plus the threshold below which Android starts
+    // killing processes — staying clear of that is what keeps a worker alive mid-inference.
+    Function("getMemoryInfo") {
+      val info = ActivityManager.MemoryInfo()
+      runCatching {
+        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(info)
+      }
+      mapOf(
+        "total" to info.totalMem,
+        "available" to info.availMem,
+        // Android begins reclaiming aggressively at this level; anything a shard plans to use has
+        // to sit above it or the worker is killed as soon as inference touches the pages.
+        "threshold" to info.threshold,
+        "low" to info.lowMemory
+      )
+    }
+
     Function("getLocalIpTransport") {
       when {
         usbIpAddress() != null -> "usb"
