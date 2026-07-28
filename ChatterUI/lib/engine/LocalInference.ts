@@ -64,7 +64,7 @@ const getSamplerFields = (max_length?: number) => {
         .reduce((acc, obj) => Object.assign(acc, obj), {})
 }
 
-const buildLocalPayload = async () => {
+export const buildLocalPayload = async () => {
     const payloadFields = getSamplerFields()
     const rep_pen = payloadFields?.['penalty_repeat']
     const reasoning = payloadFields?.['enable_thinking'] as boolean

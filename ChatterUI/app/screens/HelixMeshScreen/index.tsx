@@ -31,11 +31,13 @@ import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
 import DropdownSheet from '@components/input/DropdownSheet'
 import HelixQrSheet from '@components/views/HelixQrSheet'
+import ElizaSheet from './ElizaSheet'
 import MeshChatPanel from './MeshChatPanel'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
+import { meshSession, MeshMode } from '@lib/helixSession'
 import { encodeHotspotQuery, parseScannedAddress, withHost } from '@lib/helixHotspot'
 import { httpBaseFromHost, servedModelFromFile, syncModelFromHost } from '@lib/helixModelSync'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
@@ -75,11 +77,13 @@ const MESH_MODE_KEY = 'helix-mesh-mode'
 // Sharder never loads it here, so it cannot be inferred from the loaded context the way the
 // rest of the app does — it has to be remembered explicitly.
 const MESH_MODEL_KEY = 'helix-mesh-model-file'
-type MeshMode = 'hybrid' | 'pointer' | 'sharder'
 // Cluster secret — the phone-to-phone coordinator and the "Join as agent" side share this, and it
 // also matches the PC demo (helix/host/agent_host_ws_demo.py).
 const AGENT_SECRET = 'helix-agent-host-ws-demo'
 const HOST_PORT = 8790
+// The ELIZA easter egg: eight taps on Pointer, each within this window of the last.
+const POINTER_TAPS_FOR_ELIZA = 8
+const POINTER_TAP_WINDOW_MS = 1500
 // llama.cpp's rpc-server port on each shard worker. Fixed: every phone runs one server, and the
 // address is announced, so there is nothing to configure.
 const RPC_PORT = 50052
@@ -92,14 +96,8 @@ type HostMode = 'single' | 'voting'
 // coordinator and stopped the hotspot. Coming back showed "Start hosting" again as if nothing had
 // been running, and any phone mid-join just found a dead port. Hosting now ends only when the user
 // says so, or when the app does.
-let liveCoord: HelixCoordinator | null = null
-let liveHotspotActive = false
-let liveHostIp = ''
-let liveHostIpTransport = ''
-let liveHostQrExtra = ''
-let liveAgent: HelixAgentNode | null = null
-let liveAgentOnline = false
-let liveAgentJoinedHotspot = false
+// The session itself lives in lib/helixSession.ts — the inference layer needs the coordinator too,
+// and an engine cannot sensibly import a screen. These are views onto that one object.
 
 // Lazily required like the other native bits, so nothing here runs at app startup.
 function deviceTotalMemory(): number {
@@ -319,17 +317,22 @@ const HelixMeshScreen = () => {
 
     // L2 agent state
     const [wsUrl, setWsUrl] = useMMKVString(WS_KEY)
-    const [agentJoined, setAgentJoined] = useState(!!liveAgent)
+    const [agentJoined, setAgentJoined] = useState(!!meshSession.agent)
     const [agentJoining, setAgentJoining] = useState(false)
     // Distinct from agentJoined: the session stays joined across a Wi-Fi drop while the node
     // reconnects, and the UI should say so rather than keep claiming "online".
-    const [agentOnline, setAgentOnline] = useState(liveAgentOnline)
+    const [agentOnline, setAgentOnline] = useState(meshSession.agentOnline)
     const [showQrSheet, setShowQrSheet] = useState(false)
-    const agentRef = useRef<HelixAgentNode | null>(liveAgent)
+    // The ELIZA joke, hidden behind eight taps on Pointer. The count is a ref, not state: nothing
+    // on screen should react to it — a counter that made the UI twitch would stop being hidden.
+    const [showEliza, setShowEliza] = useState(false)
+    const pointerTaps = useRef(0)
+    const pointerTapAt = useRef(0)
+    const agentRef = useRef<HelixAgentNode | null>(meshSession.agent)
     // True once THIS join went through a direct Wi-Fi hotspot — leaving the mesh should also
     // release that network, or the phone stays bound to it (and off its normal Wi-Fi/mobile data)
     // even after the host stops hosting.
-    const joinedHotspotRef = useRef(liveAgentJoinedHotspot)
+    const joinedHotspotRef = useRef(meshSession.agentJoinedHotspot)
 
     // Model transfer: the host serves its GGUF on the same port, the joining phone pulls it if it
     // doesn't already have that exact file. useMMKVBoolean returns undefined until it's been set,
@@ -339,24 +342,24 @@ const HelixMeshScreen = () => {
     const [transferText, setTransferText] = useState('')
 
     // Device-to-device (no PC): this phone hosts the coordinator.
-    const [hosting, setHosting] = useState(!!liveCoord)
+    const [hosting, setHosting] = useState(!!meshSession.coord)
     const [hostStarting, setHostStarting] = useState(false)
-    const [hostIp, setHostIp] = useState(liveHostIp)
-    const [hostIpTransport, setHostIpTransport] = useState(liveHostIpTransport)
+    const [hostIp, setHostIp] = useState(meshSession.hostIp)
+    const [hostIpTransport, setHostIpTransport] = useState(meshSession.hostIpTransport)
     // True when hostIp came from a saved previous session, not this session's own detection — a
     // phone's LAN IP is usually stable on the same Wi-Fi, but "usually" isn't "definitely", so the
     // QR still shows (nothing to hunt for) with a note that it may be stale.
     const [hostIpIsStale, setHostIpIsStale] = useState(false)
     const [hostAgents, setHostAgents] = useState<string[]>([])
     const [hostMode, setHostMode] = useState<HostMode>('single')
-    const coordRef = useRef<HelixCoordinator | null>(liveCoord)
+    const coordRef = useRef<HelixCoordinator | null>(meshSession.coord)
 
     // Direct Wi-Fi hotspot ("fast connect"): the query string this session's QR appends after
     // ws://host:port, and whether hosting actually has a hotspot running that needs stopping.
     const [useHotspot, setUseHotspot] = useMMKVBoolean(USE_HOTSPOT_KEY)
     const hotspotOn = !!useHotspot
-    const [hostQrExtra, setHostQrExtra] = useState(liveHostQrExtra)
-    const hotspotActiveRef = useRef(liveHotspotActive)
+    const [hostQrExtra, setHostQrExtra] = useState(meshSession.hostQrExtra)
+    const hotspotActiveRef = useRef(meshSession.hotspotActive)
 
     // Subscribed, not read once: what this phone has loaded can change while it is already
     // hosting, and both the offer served to joining phones and the line describing it have to
@@ -495,12 +498,12 @@ const HelixMeshScreen = () => {
                 randomBytes: makeExpoRandomBytes(ExpoCrypto),
             })
             node.onStateChange = (v) => {
-                liveAgentOnline = v
+                meshSession.agentOnline = v
                 setAgentOnline(v)
             }
             await node.connect(url)
             agentRef.current = node
-            liveAgent = node
+            meshSession.agent = node
             setAgentJoined(true)
             setAgentOnline(true)
             Logger.infoToast(`Joined mesh as agent ${agentId}`)
@@ -514,13 +517,13 @@ const HelixMeshScreen = () => {
     const onLeaveAgent = () => {
         agentRef.current?.close()
         agentRef.current = null
-        liveAgent = null
-        liveAgentOnline = false
+        meshSession.agent = null
+        meshSession.agentOnline = false
         setAgentJoined(false)
         setAgentOnline(false)
         if (joinedHotspotRef.current) {
             joinedHotspotRef.current = false
-            liveAgentJoinedHotspot = false
+            meshSession.agentJoinedHotspot = false
             const hotspot = wifiHotspotModule()
             if (hotspot) void hotspot.leaveHotspot().catch(() => {})
         }
@@ -535,19 +538,26 @@ const HelixMeshScreen = () => {
         const node = agentRef.current
         if (!node) return
         node.onStateChange = (v) => {
-            liveAgentOnline = v
+            meshSession.agentOnline = v
             setAgentOnline(v)
         }
-        setAgentOnline(liveAgentOnline)
+        setAgentOnline(meshSession.agentOnline)
     }, [])
 
     // Keep the module-level session in step with what this screen shows, so a later mount restores
     // the same picture instead of a blank one.
     useEffect(() => {
-        liveHostIp = hostIp
-        liveHostIpTransport = hostIpTransport
-        liveHostQrExtra = hostQrExtra
+        meshSession.hostIp = hostIp
+        meshSession.hostIpTransport = hostIpTransport
+        meshSession.hostQrExtra = hostQrExtra
     }, [hostIp, hostIpTransport, hostQrExtra])
+
+    // The inference layer reads these to decide whether an ordinary chat should be answered by the
+    // mesh, and it cannot read MMKV hooks — so the choices made here are mirrored onto the session.
+    useEffect(() => {
+        meshSession.mode = meshMode
+        meshSession.answerMode = hostMode
+    }, [meshMode, hostMode])
 
     // Free memory moves as other apps come and go, and it is what the split is computed from,
     // so the panel showing it must not be a snapshot from whenever the screen first opened.
@@ -666,7 +676,7 @@ const HelixMeshScreen = () => {
     const stopHotspotIfActive = () => {
         if (!hotspotActiveRef.current) return
         hotspotActiveRef.current = false
-        liveHotspotActive = false
+        meshSession.hotspotActive = false
         setHostQrExtra('')
         const hotspot = wifiHotspotModule()
         if (hotspot) void hotspot.stopHotspot().catch(() => {})
@@ -686,7 +696,7 @@ const HelixMeshScreen = () => {
             if (released) {
                 Logger.info('Released the network binding left from joining — a host serves on all networks')
                 joinedHotspotRef.current = false
-                liveAgentJoinedHotspot = false
+                meshSession.agentJoinedHotspot = false
             }
 
             if (hotspotOn) {
@@ -707,7 +717,7 @@ const HelixMeshScreen = () => {
                 const creds = await hotspot.startHotspot()
                 hotspotStarted = true
                 hotspotActiveRef.current = true
-                liveHotspotActive = true
+                meshSession.hotspotActive = true
                 // The native side now returns '' rather than guessing when the AP interface has no
                 // address yet — falling back to ordinary detection here beats advertising a
                 // constant that may not be this device's actual hotspot address. Getting this
@@ -730,7 +740,7 @@ const HelixMeshScreen = () => {
             })
             await coord.listen(HOST_PORT, '0.0.0.0')
             coordRef.current = coord
-            liveCoord = coord
+            meshSession.coord = coord
             offerLoadedModel(coord, transferOn)
             setHosting(true)
             setHostAgents([])
@@ -746,7 +756,7 @@ const HelixMeshScreen = () => {
         } catch (e) {
             coordRef.current?.close()
             coordRef.current = null
-        liveCoord = null
+        meshSession.coord = null
             if (hotspotStarted) stopHotspotIfActive()
             Logger.errorToast(`Host start failed: ${e instanceof Error ? e.message : String(e)}`)
         } finally {
@@ -757,7 +767,7 @@ const HelixMeshScreen = () => {
     const onStopHost = () => {
         coordRef.current?.close()
         coordRef.current = null
-        liveCoord = null
+        meshSession.coord = null
         setHosting(false)
         setHostAgents([])
         stopHotspotIfActive()
@@ -911,7 +921,24 @@ const HelixMeshScreen = () => {
             <Text style={styles.section}>Mode</Text>
             <HorizontalSelector
                 selected={meshMode}
-                onPress={(v) => setMeshMode(v)}
+                onPress={(v) => {
+                    setMeshMode(v)
+                    if (v !== 'pointer') {
+                        pointerTaps.current = 0
+                        return
+                    }
+                    // Taps must be deliberate and consecutive: a long gap means someone simply
+                    // chose Pointer twice over a session, not that they are hunting for something.
+                    const now = Date.now()
+                    pointerTaps.current = now - pointerTapAt.current > POINTER_TAP_WINDOW_MS
+                        ? 1
+                        : pointerTaps.current + 1
+                    pointerTapAt.current = now
+                    if (pointerTaps.current >= POINTER_TAPS_FOR_ELIZA) {
+                        pointerTaps.current = 0
+                        setShowEliza(true)
+                    }
+                }}
                 values={[
                     { label: 'Hybrid', value: 'hybrid' },
                     { label: 'Pointer', value: 'pointer' },
@@ -1367,6 +1394,8 @@ const HelixMeshScreen = () => {
                 </>
             )}
 
+            <ElizaSheet visible={showEliza} setVisible={setShowEliza} />
+
             <HelixQrSheet
                 visible={showQrSheet}
                 setVisible={setShowQrSheet}
@@ -1418,7 +1447,7 @@ const HelixMeshScreen = () => {
                                     return
                                 }
                                 joinedHotspotRef.current = true
-                                liveAgentJoinedHotspot = true
+                                meshSession.agentJoinedHotspot = true
                                 // Trust the network over the QR code. The gateway of a hotspot IS
                                 // the phone serving it, read from the DHCP lease we just took,
                                 // whereas the address in the code is only what the host BELIEVED

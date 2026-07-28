@@ -2,6 +2,7 @@ import BackgroundService from 'react-native-background-actions'
 
 import { AppSettings } from '@lib/constants/GlobalValues'
 import { useAppModeStore } from '@lib/state/AppMode'
+import { meshCanAnswer } from '@lib/helixSession'
 import { Chats, useInference } from '@lib/state/Chat'
 import { Instructs } from '@lib/state/Instructs'
 import { SamplersManager } from '@lib/state/SamplerState'
@@ -14,6 +15,7 @@ import { APIBuilderParams, buildAndSendRequest } from './API/APIBuilder'
 import { APIConfiguration, APIValues } from './API/APIBuilder.types'
 import { APIManager } from './API/APIManagerState'
 import { localInference } from './LocalInference'
+import { meshInference } from './MeshInference'
 import { Tokenizer } from './Tokenizer'
 
 export async function regenerateResponse(swipeId: number, regenCache: boolean = true) {
@@ -74,7 +76,12 @@ export async function generateResponse(swipeId: number) {
     Logger.info(`Obtaining response.`)
     const appMode = useAppModeStore.getState().appMode
 
-    if (appMode === 'local') {
+    // Pointer answers from another phone's whole model, so an ordinary chat routes through the
+    // mesh instead of this phone's engine. Sharder is absent on purpose: its split model already
+    // IS this phone's context, so the local path below runs across the mesh without knowing it.
+    if (appMode === 'local' && meshCanAnswer()) {
+        await BackgroundService.start(meshInference, completionTaskOptions)
+    } else if (appMode === 'local') {
         await BackgroundService.start(localInference, completionTaskOptions)
     } else {
         await BackgroundService.start(chatInferenceStream, completionTaskOptions)
