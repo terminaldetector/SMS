@@ -38,6 +38,7 @@ import SettingsDrawer from '@components/views/SettingsDrawer'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
 import { activeOf, buildBranchPrompt, MeshTurn, useHelixChat } from '@lib/helixChat'
 import { meshRunBlocker, runMeshTurn } from '@lib/helixChatRun'
+import { buildBranchPromptExact } from '@lib/helixChatTokens'
 import { MultimodalStatus, probeMultimodal } from '@lib/helixMultimodal'
 import { MeshMode } from '@lib/helixSession'
 import { helixMeshContext } from '@lib/helixSettings'
@@ -146,8 +147,18 @@ const MeshChatScreen = () => {
 
         // The prompt is built from history plus this turn BEFORE anything is stored, so it never
         // depends on reading state back out mid-update.
+        //
+        // Sharder measures against the real tokenizer rather than guessing from character count —
+        // it has one loaded, since the split model IS this phone's own context. The character
+        // estimate stays for Pointer, where the answering phone's tokenizer is genuinely unknown;
+        // using it for Sharder too was the cause of "Context is full" failures on Cyrillic-heavy
+        // chats, where 4 chars/token undercounts by a wide margin and the trim keeps too much.
         const userTurn: MeshTurn = { role: 'user', text, images: sentImages, at: Date.now() }
-        const built = buildBranchPrompt([...branch.turns, userTurn], contextBudget)
+        const allTurns = [...branch.turns, userTurn]
+        const built =
+            mode === 'sharder'
+                ? await buildBranchPromptExact(allTurns, contextBudget)
+                : buildBranchPrompt(allTurns, contextBudget)
 
         addTurn(mode, userTurn)
         addTurn(mode, { role: 'assistant', text: '', at: Date.now() })
