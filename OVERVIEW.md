@@ -48,8 +48,10 @@ magic(4)="HLX1" | flags(1) | epoch(4,BE) | nonce(12) | sealed_body(...)
 
 **Транспорт.** Координатор — WebSocket-сервер на самом телефоне (порт по умолчанию 8790,
 настраивается). Агент — встроенный в RN `WebSocket`, нативный модуль ему не нужен.
-Слои в Sharder ходят отдельным каналом: llama.cpp `rpc-server` на каждом телефоне
-(по умолчанию 50052), координатор строит `--rpc` список и `--tensor-split`.
+Слои в Sharder ходят отдельным каналом: llama.cpp `rpc-server` на телефонах-воркерах
+(по умолчанию 50052). Хост держит первую полосу слоёв на своём CPU и строит для llama.cpp
+`--rpc` (воркеры), `--tensor-split` (доли **по устройствам воркеров**) и `-ngl` (размер
+удалённого хвоста) — см. `helix.rpc_cluster.llama_rpc_args` / `ChatterUI/lib/helixShardArgs.ts`.
 
 **Сеть.** LAN, USB-tethering или прямой Wi-Fi (Android `LocalOnlyHotspot` +
 `WifiNetworkSpecifier`), подключение по QR. BLE (BitChat) — **только** для внешних клиентов

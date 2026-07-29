@@ -68,7 +68,9 @@ export async function buildShardSend(
     const budget = Math.max(256, budgetTokens - reserveForAnswer)
     const useTemplate = !!context && hasChatTemplate(context)
 
-    const render = async (kept: MeshTurn[]): Promise<{ prompt: string; messages?: MeshMessage[] }> => {
+    const render = async (
+        kept: MeshTurn[]
+    ): Promise<{ prompt: string; messages?: MeshMessage[] }> => {
         if (!useTemplate) return { prompt: renderPlain(kept) }
         const messages = messagesFromTurns(kept)
         const prompt = await formatWithTemplate(context, messages)
@@ -115,7 +117,8 @@ function finish(
 // module version that shapes them slightly differently.
 function hasChatTemplate(context: any): boolean {
     try {
-        if (typeof context.isJinjaSupported === 'function' && context.isJinjaSupported()) return true
+        if (typeof context.isJinjaSupported === 'function' && context.isJinjaSupported())
+            return true
         return !!context?.model?.metadata?.['tokenizer.chat_template']
     } catch {
         return false

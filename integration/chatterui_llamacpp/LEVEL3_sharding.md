@@ -31,8 +31,22 @@ HELIX emits exactly what the driver needs (`helix/rpc_cluster.py` → `rpc_plan`
 ```
 { ring:[hlxA,hlxB,hlxC], main:"hlxA",
   rpc_arg:"10.0.0.2:50052,10.0.0.3:50052",     // --rpc  (the workers)
-  tensor_split:[0.5,0.333,0.167],               // --tensor-split (main-local, worker0, worker1)
+  tensor_split:[0.5,0.333,0.167],               // each RING NODE's share of the model, main first
   endpoints:[{node,addr,band:[s,e),role}] }
+```
+
+That is HELIX's view of the split, and it is **not** llama.cpp's arguments — mistaking the two is
+what made a two-phone mesh run on one phone. `llama_rpc_args(plan)` (Python) /
+`shardLlamaArgs(plan, registered)` (`ChatterUI/lib/helixShardArgs.ts`) does the translation:
+
+```
+{ rpc_servers:["10.0.0.2:50052","10.0.0.3:50052"],   // --rpc, the workers
+  tensor_split:[0.667,0.333],                        // --tensor-split, per remote DEVICE, over the
+                                                     //   workers alone — the driver's CPU is not a
+                                                     //   device and has no slot in this list
+  devices:["RPC0","RPC1"],                           // what those ratios refer to, by name
+  n_gpu_layers:4 }                                   // -ngl, the remote tail + the output layer;
+                                                     //   the driver keeps layers 0..2 on its CPU
 ```
 
 This control plane is **built and tested here** (no device needed):
@@ -59,13 +73,18 @@ are unchanged.
 - **`rpc_servers` + `startRpcServer`:** done — `initLlama({ rpc_servers: string[] })` registers
   remote RPC devices; `startRpcServer(endpoint, options?)` runs a worker (no stop API — it serves
   for the process's lifetime, same as the standalone `rpc-server` binary).
-- **`tensor_split`:** done — reads a `number[]` into `common_params.tensor_split[128]`, in the same
-  `[local device, rpc_servers[0], rpc_servers[1], ...]` order HELIX's `rpc_cluster.py` plans use.
+- **`tensor_split`:** done — reads a `number[]` into `common_params.tensor_split[128]`. Indexed by
+  llama.cpp's device list (`[rpc devices…, local GPUs…]`), so the ratios are per remote device, not
+  per ring node — see `shardLlamaArgs`.
+- **`addRpcServers`:** done — registers the workers' endpoints *before* the load and returns the
+  device names each contributed plus their reported memory. Without it an unreachable worker is
+  invisible: llama.cpp loads the whole model locally and succeeds.
 - **Wire-up (TS, matches the real fork API):** `ChatterUI/lib/helixRpc.ts` (and the
   `app_mod/lib/helixRpc.ts` reference copy) — workers call `startShardWorker(native, port)`, the
-  driver calls `startShardMain(client, initLlama, model)` which fetches `rpcPlan()` and inits the
-  model with the RPC topology (`plan.rpc_arg.split(',')` for `rpc_servers`, `plan.tensor_split`).
-  See also `LlamaRpcCluster` in `helix.ts`.
+  driver calls `startShardMain(client, native, initLlama, model)`, which fetches `rpcPlan()`,
+  registers the workers, translates the plan (`shardLlamaArgs`) and inits the model with
+  `rpc_servers` / `devices` / `tensor_split` / `n_gpu_layers`. See also `LlamaRpcCluster` in
+  `helix.ts`.
 
 **→ How it was built:** `FORK_cui-llama-rpc.md` — the file-by-file recipe this fork followed (vendor
 `ggml-rpc`, add `rpc_servers`/`tensor_split` to `common_params`, `-DLM_GGML_USE_RPC`, JSI param
@@ -84,7 +103,8 @@ python -m helix.host.rpc_launch --host <coord-ip> --port <port> \
     --model-id big-16b --n-layers 80 --model-bytes 16000000000 --model-path /sdcard/big.gguf
 # ->  worker B:  rpc-server -H 0.0.0.0 -p 50052        (run on each worker device)
 #     worker C:  rpc-server -H 0.0.0.0 -p 50052
-#     main A:    llama-cli -m /sdcard/big.gguf -ngl 99 --rpc B:50052,C:50052 --tensor-split 0.5,0.33,0.17
+#     main A:    llama-cli -m /sdcard/big.gguf -ngl 51 --rpc B:50052,C:50052 --tensor-split 0.6667,0.3333
+#                (-ngl is the REMOTE tail + 1, not the layer count; the ratios span the workers)
 ```
 
 Build llama.cpp per device (Termux on Android, or a Linux SBC) with `-DGGML_RPC=ON`; run the printed

@@ -1401,8 +1401,9 @@ const HelixMeshScreen = () => {
             <View style={styles.agentBox}>
                 <Text style={styles.section}>Sharding — one big model across phones</Text>
                 <Text style={styles.dim}>
-                    Splits a model too big for one phone by layers, using llama.cpp's RPC. Every
-                    phone taking part shares its RAM; the host loads the model and drives it.
+                    Splits a model too big for one phone by layers, using llama.cpp's RPC. The host
+                    holds the first layers itself and hands the rest to the phones that joined it,
+                    so only their share ever crosses the Wi-Fi.
                 </Text>
 
                 {/* The mode selector at the top of the screen already chose this; what remains
@@ -1437,6 +1438,8 @@ const HelixMeshScreen = () => {
                 )}
                 {!shardRpcAddr && (
                     <Text style={styles.dim}>
+                        Needed on a phone that JOINS someone else's mesh — it is how the host can put
+                        layers here. The host does not need it: the layers it keeps never leave it.
                         Can't be switched off without restarting the app — llama.cpp's rpc-server
                         has no stop.
                     </Text>
@@ -1446,8 +1449,10 @@ const HelixMeshScreen = () => {
                     <>
                         <Text style={[styles.node, styles.gap]}>As host</Text>
                         <Text style={styles.dim}>
-                            Load the model you want to shard (Models), make sure the other phones
-                            joined and tapped "Share this phone's RAM", then start.
+                            Pick the model above — it is never loaded whole, so it does not need
+                            loading first. Make sure the other phones joined and tapped "Share this
+                            phone's RAM", then start. If one of them cannot be reached, sharding
+                            stops and says which, rather than quietly running here alone.
                         </Text>
                         <ThemedButton
                             label={shardStarting ? 'Starting…' : 'Shard the loaded model'}

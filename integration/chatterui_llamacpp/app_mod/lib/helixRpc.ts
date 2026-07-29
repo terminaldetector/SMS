@@ -16,6 +16,8 @@
 import { HelixClient } from './helixClient'
 import { planRpcCluster } from './helixPlacement'
 import type { Capacity, RpcClusterPlan } from './helixPlacement'
+import { shardLlamaArgs } from './helixShardArgs'
+import type { RpcEndpointDevices } from './helixShardArgs'
 
 // The native surface the forked cui-llama.rn provides (forks/cui-llama.rn-rpc/src/index.ts).
 export interface NativeHelixRpc {
@@ -24,16 +26,23 @@ export interface NativeHelixRpc {
     // detached background thread; the underlying accept() loop never returns, so there is NO stop
     // API — like running the standalone `rpc-server` binary, it serves for the process's lifetime.
     startRpcServer(endpoint: string, options?: { cacheDir?: string; nThreads?: number; devices?: string[] }): Promise<boolean>
+    // Driver side: register the workers' rpc-servers as backend devices BEFORE loading, and find
+    // out what each one contributed. An endpoint that cannot be reached returns no devices — which
+    // is the only moment that is visible, since a load with an unreachable worker just puts the
+    // whole model on this phone and succeeds. The device names are also what tensor_split is
+    // indexed by, and one endpoint can serve more than one.
+    addRpcServers(endpoints: string[]): Promise<RpcEndpointDevices[]>
 }
 
-// The forked initLlama accepts rpc_servers (array, not a joined string) + tensor_split (main/driver
-// side). Matches NativeContextParams in forks/cui-llama.rn-rpc/src/types.ts.
+// The forked initLlama accepts rpc_servers (array, not a joined string), tensor_split and an
+// explicit device list. Matches NativeContextParams in forks/cui-llama.rn-rpc/src/types.ts.
 export interface RpcInitLlama {
     (params: {
         model: string
         n_gpu_layers?: number
         rpc_servers?: string[] // ["host:port", ...] — the plan's workers, in ring order
-        tensor_split?: number[] // llama.cpp --tensor-split ratios, [main-local, worker0, ...]
+        devices?: string[] // the remote devices by name, aligned with tensor_split
+        tensor_split?: number[] // llama.cpp --tensor-split ratios, one per DEVICE (not per phone)
         [k: string]: unknown
     }): Promise<unknown>
 }
@@ -57,18 +66,27 @@ export async function startShardWorker(native: NativeHelixRpc, port = 50052): Pr
 
 // Load a model distributed across a plan's ring. Shared by both planning paths below — the only
 // thing that differs between them is where the plan came from.
+//
+// The plan is translated by helixShardArgs.ts rather than passed through: a HELIX plan's ratios span
+// the whole ring including the driver, and llama.cpp's span its DEVICES, which the driver's CPU is
+// not one of. Handing the plan over directly is what made a two-phone mesh run on one phone.
 async function loadDistributed(
+    native: NativeHelixRpc,
     initLlama: RpcInitLlama,
     plan: RpcClusterPlan,
     modelPath: string
 ): Promise<ShardWorkerHandle> {
-    // llama.cpp: --rpc = the worker rpc-servers; --tensor-split spans [main-local, worker0, ...].
-    // plan.rpc_arg is "host:port,host:port" (the CLI form) — split into the array initLlama wants.
+    const endpoints = plan.rpc_arg ? plan.rpc_arg.split(',').filter(Boolean) : []
+    // Registered first, so an unreachable worker is an error here instead of a model that quietly
+    // loaded whole on this phone, and so the split can be indexed by real device names.
+    const registered = await native.addRpcServers(endpoints)
+    const args = shardLlamaArgs(plan, registered)
     await initLlama({
         model: modelPath,
-        n_gpu_layers: 99,
-        rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
-        tensor_split: plan.tensor_split,
+        n_gpu_layers: args.n_gpu_layers,
+        rpc_servers: args.rpc_servers,
+        devices: args.devices,
+        tensor_split: args.tensor_split,
     })
     return {
         plan,
@@ -112,21 +130,23 @@ export function planLocalShard(
 // planLocalShard + load, for callers that drive initLlama themselves (the app loads through
 // ChatterUI's model store instead, so the sharded context is the one chats use).
 export async function startShardMainLocal(
+    native: NativeHelixRpc,
     initLlama: RpcInitLlama,
     model: { model_id: string; model_path: string; n_layers: number; model_bytes: number },
     host: ShardNode,
     workers: ShardNode[]
 ): Promise<ShardWorkerHandle> {
-    return loadDistributed(initLlama, planLocalShard(model, host, workers), model.model_path)
+    return loadDistributed(native, initLlama, planLocalShard(model, host, workers), model.model_path)
 }
 
 // Main/driver phone: get the HELIX plan and load the model distributed across the ring's workers.
 export async function startShardMain(
     client: HelixClient,
+    native: NativeHelixRpc,
     initLlama: RpcInitLlama,
     model: { model_id: string; model_path: string; n_layers: number; model_bytes: number }
 ): Promise<ShardWorkerHandle> {
     const plan = await client.rpcPlan(model)
     if (!plan.ok) throw new Error('rpc_plan failed (is the coordinator a ControlNode with rpc_addrs?)')
-    return loadDistributed(initLlama, plan, model.model_path)
+    return loadDistributed(native, initLlama, plan, model.model_path)
 }
