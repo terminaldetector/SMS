@@ -613,6 +613,45 @@ const HelixMeshScreen = () => {
         return () => clearInterval(t)
     }, [])
 
+    // Keep what this phone announced true for as long as it stays joined.
+    //
+    // The card was filled in once, at join: the free memory the host weighs the split by, and the
+    // address it will dial for layers. Both move. Free memory moves constantly — the host was
+    // planning against a figure minutes old, which is the number the whole memory-profile
+    // arithmetic exists to get right. The address moves whenever the network does, and this phone
+    // changes network by design: joining a host's direct hotspot gives it a new one. A worker that
+    // started sharing on its ordinary Wi-Fi and then joined a hotspot kept announcing the old
+    // address, so the host dialled somewhere unreachable — which used to end as a shard quietly
+    // running on the host alone.
+    useEffect(() => {
+        if (!agentJoined) return
+        let stopped = false
+        const t = setInterval(() => {
+            void (async () => {
+                const node = agentRef.current
+                if (!node || stopped) return
+                const patch: { mem: number; rpc?: string } = { mem: deviceMemory().usable }
+                if (shardRpcAddr) {
+                    const { ip } = await getLanIp()
+                    const addr = ip ? `${ip}:${rpcPort}` : ''
+                    if (addr && addr !== shardRpcAddr) {
+                        if (stopped) return
+                        setShardRpcAddr(addr)
+                        patch.rpc = addr
+                        Logger.info(
+                            `This phone's address changed — announcing layers at ${addr} (was ${shardRpcAddr})`
+                        )
+                    }
+                }
+                if (!stopped) node.updateCard(patch)
+            })()
+        }, 5000)
+        return () => {
+            stopped = true
+            clearInterval(t)
+        }
+    }, [agentJoined, shardRpcAddr, rpcPort])
+
     // The mesh's model list, refreshed when the screen opens and after a transfer lands.
     const refreshModels = async () => {
         try {
