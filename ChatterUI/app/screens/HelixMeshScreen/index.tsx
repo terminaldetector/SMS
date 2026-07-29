@@ -38,11 +38,14 @@ import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
+    formatShardArgs,
     formatShardLoaded,
     formatShardMemory,
     formatShardPlan,
     ShardDeviceMemory,
 } from '@lib/helixShardLog'
+import { shardLlamaArgs } from '@lib/helixShardArgs'
+import type { RpcEndpointDevices } from '@lib/helixShardArgs'
 import {
     HelixKeys,
     helixMemoryFraction,
@@ -854,8 +857,30 @@ const HelixMeshScreen = () => {
         }
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const { startRpcServer } = require('cui-llama.rn')
-            const ok = await startRpcServer(`0.0.0.0:${rpcPort}`)
+            const { startRpcServer, getBackendDevicesInfo } = require('cui-llama.rn')
+            // Serve exactly one backend, and say which.
+            //
+            // By default the rpc-server offers every local device — on a phone that can mean its CPU
+            // and its GPU behind the same address, which the host then has to divide a band between.
+            // Both live in the same RAM, so there is nothing to gain and a real cost: the GPU
+            // backend may refuse a quantisation the CPU accepts, and those tensors then fall back
+            // across the network to the HOST's CPU instead of staying on this phone. One device also
+            // keeps the arithmetic honest — the memory this phone announced is system RAM, which is
+            // exactly what the CPU backend allocates from.
+            let serve: string[] = []
+            try {
+                const local: { deviceName: string; backend: string; type: string }[] =
+                    await getBackendDevicesInfo()
+                const cpu = local.find((d) => /cpu/i.test(d.type) || /^cpu$/i.test(d.deviceName))
+                if (cpu) serve = [cpu.deviceName]
+                Logger.info(
+                    `Local backends: ${local.map((d) => `${d.deviceName} (${d.backend}/${d.type})`).join(', ') || 'none'}` +
+                        `\nServing to the mesh: ${serve.join(', ') || 'every local device (could not identify the CPU)'}`
+                )
+            } catch {
+                /* older native module: fall back to serving whatever it picks by default */
+            }
+            const ok = await startRpcServer(`0.0.0.0:${rpcPort}`, serve.length ? { devices: serve } : undefined)
             if (!ok) {
                 // The native side only answers false for two reasons: this build has no RPC
                 // backend compiled in, or the backend registry offered no local device to serve.
@@ -932,9 +957,24 @@ const HelixMeshScreen = () => {
                         [hostNode, ...workers.map((w) => ({ id: w.id, mem: w.mem, rpc: w.rpc ?? '' }))]
                     )
             )
+            // Register the workers' rpc-servers before anything is loaded. This is the step that
+            // turns "the shard silently ran on this phone alone" into an error with an address in
+            // it: an endpoint nobody answers contributes no device, and a load that goes ahead
+            // anyway just puts the whole model here and succeeds. It also reports how many devices
+            // each worker is serving, which is what the split has to be indexed by.
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { addRpcServers } = require('cui-llama.rn')
+            const endpoints = plan.rpc_arg ? plan.rpc_arg.split(',').filter(Boolean) : []
+            const registered: RpcEndpointDevices[] = await addRpcServers(endpoints)
+            const args = shardLlamaArgs(plan, registered)
+            Logger.info('\n' + formatShardArgs(args, nLayers))
             setShardPlan(
                 plan.endpoints
-                    .map((e) => `${e.role === 'main' ? 'this phone' : e.node}: layers ${e.band[0]}–${e.band[1]}`)
+                    .map((e) =>
+                        e.role === 'main'
+                            ? `this phone: layers ${e.band[0]}–${e.band[1]} (kept here)`
+                            : `${e.node}: layers ${e.band[0]}–${e.band[1]}`
+                    )
                     .join('\n')
             )
             // Only if something is actually resident: load() refuses a model that is already
@@ -945,23 +985,29 @@ const HelixMeshScreen = () => {
                 await Llama.useLlamaModelStore.getState().unload()
             const startedAt = Date.now()
             await Llama.useLlamaModelStore.getState().load(model, {
-                rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
-                tensor_split: plan.tensor_split,
-                // Without this every layer stays on this phone regardless of the split.
-                n_layers: nLayers,
+                rpc_servers: args.rpc_servers,
+                tensor_split: args.tensor_split,
+                devices: args.devices,
+                n_gpu_layers: args.n_gpu_layers,
             })
-            // What the load actually did, as opposed to what it was asked to do. `sharded` false
-            // here means the load fell through to the ordinary path and the split was never taken.
+            // What the load actually did, as opposed to what it was asked to do — read back off the
+            // context's own device list, which is the only thing that knows.
+            const loaded = Llama.useLlamaModelStore.getState()
             Logger.info(
                 '\n' +
                     formatShardLoaded(
                         plan,
-                        nLayers,
+                        args,
                         Date.now() - startedAt,
-                        Llama.useLlamaModelStore.getState().sharded
+                        loaded.sharded,
+                        loaded.context?.devices ?? []
                     )
             )
-            Logger.infoToast(`Sharded across ${plan.ring.length} phones`)
+            if (!loaded.sharded) throw new Error('no worker held any layers — see the log above')
+            Logger.infoToast(
+                `Sharded across ${plan.ring.length} phones — ${args.host_layers} layers here, ` +
+                    `${args.remote_layers} away`
+            )
         } catch (e) {
             Logger.errorToast(`Shard failed: ${e instanceof Error ? e.message : String(e)}`)
         } finally {

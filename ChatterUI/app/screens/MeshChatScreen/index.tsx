@@ -38,7 +38,10 @@ import SettingsDrawer from '@components/views/SettingsDrawer'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
 import { activeOf, buildBranchPrompt, MeshTurn, useHelixChat } from '@lib/helixChat'
 import { meshRunBlocker, runMeshTurn } from '@lib/helixChatRun'
-import { buildBranchPromptExact } from '@lib/helixChatTokens'
+import { buildShardSend } from '@lib/helixChatTokens'
+import type { MeshSend } from '@lib/helixChatTokens'
+import { MESH_PLAIN_STOPS } from '@lib/helixPrompt'
+import type { BuiltPrompt } from '@lib/helixPrompt'
 import { MultimodalStatus, probeMultimodal } from '@lib/helixMultimodal'
 import { MeshMode } from '@lib/helixSession'
 import { helixMeshContext } from '@lib/helixSettings'
@@ -52,6 +55,17 @@ import BranchDrawer from './BranchDrawer'
 const MAX_ATTACH_BYTES = 128 * 1024
 
 const isMode = (v: unknown): v is MeshMode => v === 'pointer' || v === 'sharder' || v === 'hybrid'
+
+// Pointer's prompt stays the plain `User:`/`Assistant:` form: the answering phone's model is
+// unknown from here, so there is no template to apply and no tokenizer to count with. The stops
+// travel with it anyway — the agent applies them where the tokens are produced (helixAgent.ts).
+const plainSend = (built: BuiltPrompt): MeshSend => ({
+    prompt: built.prompt,
+    stop: MESH_PLAIN_STOPS,
+    dropped: built.dropped,
+    tokens: built.estimatedTokens,
+    formatting: 'plain',
+})
 
 const MeshChatScreen = () => {
     const styles = useStyles()
@@ -155,10 +169,10 @@ const MeshChatScreen = () => {
         // chats, where 4 chars/token undercounts by a wide margin and the trim keeps too much.
         const userTurn: MeshTurn = { role: 'user', text, images: sentImages, at: Date.now() }
         const allTurns = [...branch.turns, userTurn]
-        const built =
+        const built: MeshSend =
             mode === 'sharder'
-                ? await buildBranchPromptExact(allTurns, contextBudget)
-                : buildBranchPrompt(allTurns, contextBudget)
+                ? await buildShardSend(allTurns, contextBudget)
+                : plainSend(buildBranchPrompt(allTurns, contextBudget))
 
         addTurn(mode, userTurn)
         addTurn(mode, { role: 'assistant', text: '', at: Date.now() })
@@ -174,7 +188,7 @@ const MeshChatScreen = () => {
                 )
 
             let streamed = ''
-            const answer = await runMeshTurn(mode, built.prompt, {
+            const answer = await runMeshTurn(mode, built, {
                 images: sentImages,
                 onToken: (chunk) => {
                     streamed += chunk

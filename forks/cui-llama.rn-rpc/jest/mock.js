@@ -175,6 +175,17 @@ if (!NativeModules.RNLlama) {
       jest.fn(async () => false),
     )
     setGlobal(
+      'llamaAddRpcServers',
+      jest.fn(async (endpoints) =>
+        (endpoints || []).map((endpoint) => ({
+          endpoint,
+          devices: [],
+          freeMemory: [],
+          totalMemory: [],
+        })),
+      ),
+    )
+    setGlobal(
       'llamaLoadSession',
       jest.fn(async () => ({ tokens_loaded: 0, prompt: '' })),
     )

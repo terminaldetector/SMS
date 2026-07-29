@@ -69,3 +69,57 @@ export function buildBranchPrompt(
     const prompt = kept.join('\n') + '\nAssistant:'
     return { prompt, dropped: turns.length - kept.length, estimatedTokens: estimateTokens(prompt) }
 }
+
+// The instruction the mesh chat opens with, for models that have a chat template to put it in.
+//
+// A test chat with no system turn at all is what produced answers that restated the question and
+// then carried on inventing both sides of the conversation: nothing had ever told the model what it
+// was doing or when to stop. Short on purpose — this window exists to show whether a split model
+// still holds a conversation, and a long persona would be the thing under test instead.
+export const MESH_SYSTEM_PROMPT =
+    'You are a helpful assistant answering over a mesh of phones. Answer the last user message ' +
+    'directly and concisely, then stop. Do not write the user\'s next message.'
+
+export interface MeshMessage {
+    role: 'system' | 'user' | 'assistant'
+    content: string
+}
+
+/** A branch as chat-template messages — the form a model with a template expects. */
+export function messagesFromTurns(turns: MeshTurn[], system = MESH_SYSTEM_PROMPT): MeshMessage[] {
+    const messages: MeshMessage[] = system ? [{ role: 'system', content: system }] : []
+    for (const t of turns) messages.push({ role: t.role, content: t.text })
+    return messages
+}
+
+/**
+ * Stop sequences for a model with NO chat template, where the prompt is bare `User:`/`Assistant:`
+ * lines.
+ *
+ * Without them the model does exactly what the prompt suggests: it answers, writes `User:` and keeps
+ * going, playing both parts until the token budget runs out. Every mesh answer looked like a model
+ * stuck in a loop, and the loop was in the prompt format.
+ */
+export const MESH_PLAIN_STOPS = ['\nUser:', 'User:', '\nAssistant:', '\nYou:']
+
+const ROLE_ECHO = /\n?\s*(?:User|Assistant|You|Human)\s*:/
+
+/**
+ * Tidy one mesh answer for display.
+ *
+ * Two things leak through even with stops in place: a reasoning block, when a thinking model decides
+ * to think out loud in the visible channel, and the beginning of a role turn the model started
+ * writing before a stop sequence could match. Both are noise about the harness rather than anything
+ * the mesh did, and both were on screen.
+ */
+export function cleanMeshAnswer(text: string, formatting: 'template' | 'plain' = 'template'): string {
+    let out = text.replace(/<think>[\s\S]*?<\/think>/g, '')
+    // An unclosed block means generation stopped mid-thought: there is no answer in it to keep.
+    const openThink = out.indexOf('<think>')
+    if (openThink !== -1) out = out.slice(0, openThink)
+    if (formatting === 'plain') {
+        const echo = out.search(ROLE_ECHO)
+        if (echo !== -1) out = out.slice(0, echo)
+    }
+    return out.trim()
+}
