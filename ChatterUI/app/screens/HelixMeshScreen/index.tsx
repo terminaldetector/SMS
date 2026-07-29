@@ -32,7 +32,6 @@ import HeaderTitle from '@components/views/HeaderTitle'
 import DropdownSheet from '@components/input/DropdownSheet'
 import HelixQrSheet from '@components/views/HelixQrSheet'
 import ElizaSheet from './ElizaSheet'
-import MeshChatPanel from './MeshChatPanel'
 import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/helixAgent'
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
@@ -914,6 +913,21 @@ const HelixMeshScreen = () => {
         }
     }
 
+    // Said here as well as in the chat itself, so the reason a chat will not answer is visible
+    // beside the controls that fix it rather than only after opening it.
+    const chatBlocker =
+        meshMode === 'pointer'
+            ? !hosting
+                ? 'Start hosting above, and have the other phone join, before this can answer.'
+                : hostAgents.length === 0
+                  ? 'No device has joined the mesh yet.'
+                  : undefined
+            : !loadedContext
+              ? 'Nothing is loaded yet — start the shard above first.'
+              : !loadedSharded
+                ? 'The model here is loaded whole, not split. Start the shard above to test the mesh.'
+                : undefined
+
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
             <HeaderTitle title="HELIX Mesh" />
@@ -1352,55 +1366,32 @@ const HelixMeshScreen = () => {
             </View>
             )}
 
-            {/* One test chat per mode, wired to that mode's own path — Pointer asks another
-                phone's whole model through the coordinator, Sharder runs this phone's split one
-                directly. Hybrid gets none: it is a placeholder with nothing behind it. */}
-            {meshMode === 'pointer' && (
-                <MeshChatPanel
-                    title="Test chat — Pointer"
-                    hint="Sends the prompt to a joined phone and shows what its model answers. Track A: whole agents exchanging results."
-                    disabledReason={
-                        !hosting
-                            ? 'Start hosting above, and have the other phone join, to test this.'
-                            : hostAgents.length === 0
-                              ? 'No device has joined the mesh yet.'
-                              : undefined
+            {/* One chat per mode, on its own screen rather than inline. A single-shot panel could
+                only show that something came back; a conversation with branches is what actually
+                tests whether context survives the mesh. Hybrid gets none: it is a placeholder with
+                nothing behind it. */}
+            <View style={styles.agentBox}>
+                <Text style={styles.section}>
+                    {meshMode === 'pointer' ? 'Chat — Pointer' : 'Chat — Sharder'}
+                </Text>
+                <Text style={styles.dim}>
+                    {meshMode === 'pointer'
+                        ? 'A conversation answered by a joined phone. Branch it to test whether context is really carried across the mesh.'
+                        : 'A conversation on the model split across the phones above. Branch it to test whether the split context holds.'}
+                </Text>
+                {!!chatBlocker && <Text style={[styles.dim, styles.gap]}>{chatBlocker}</Text>}
+                <ThemedButton
+                    label="Open chat"
+                    variant="primary"
+                    onPress={() =>
+                        router.push({
+                            pathname: '/screens/MeshChatScreen',
+                            params: { mode: meshMode },
+                        })
                     }
-                    onSend={async (text) => {
-                        const coord = coordRef.current
-                        if (!coord) throw new Error('not hosting')
-                        return await coord.infer(text, hostMode)
-                    }}
+                    buttonStyle={styles.gap}
                 />
-            )}
-
-            {meshMode === 'sharder' && (
-                <MeshChatPanel
-                    title="Test chat — Sharder"
-                    hint="Runs on the model split across the phones above. Streams as it goes, so the first token tells you the ring is alive."
-                    disabledReason={
-                        !loadedContext
-                            ? 'Nothing is loaded yet — start the shard above first.'
-                            : !loadedSharded
-                              ? 'The model here is loaded whole, not split. Start the shard above to test the mesh.'
-                              : undefined
-                    }
-                    onSend={async (text, onToken) => {
-                        const store = Llama.useLlamaModelStore.getState()
-                        if (!store.context) throw new Error('no model loaded')
-                        let out = ''
-                        await store.completion(
-                            { prompt: text, n_predict: 256 },
-                            (t: string) => {
-                                out += t
-                                onToken(t)
-                            },
-                            () => {}
-                        )
-                        return out.trim() || '(empty answer)'
-                    }}
-                />
-            )}
+            </View>
                 </>
             )}
 

@@ -79,6 +79,8 @@ namespace Drawer {
         SETTINGS = 'settings',
         CHATLIST = 'chats',
         USERLIST = 'userlist',
+        /** The mesh chat's context branches — the same role CHATLIST plays for ordinary chats. */
+        MESHBRANCH = 'meshbranch',
     }
 
     export const Body: React.FC<DrawerBodyProps> = ({

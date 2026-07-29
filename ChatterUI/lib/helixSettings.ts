@@ -22,6 +22,8 @@ export const HelixKeys = {
     secret: 'helix-cluster-secret',
     /** How much of a phone's free memory it will commit to holding layers. */
     memoryProfile: 'helix-memory-profile',
+    /** Context budget for a Pointer conversation, where the remote model's window is unknown. */
+    meshContext: 'helix-mesh-context',
 } as const
 
 export const HELIX_DEFAULT_PORT = 8790
@@ -65,6 +67,21 @@ export function helixRpcPort(): number {
 export function helixSecret(): string {
     const s = mmkv.getString(HelixKeys.secret)
     return s && s.length > 0 ? s : HELIX_DEFAULT_SECRET
+}
+
+// A Pointer conversation is held by another phone's model, whose context window this phone has no
+// way to read — the protocol announces memory and an address, not a context length. So the history
+// sent has to be budgeted against a number someone sets, and 8k is the smallest window in common
+// use: too small wastes a larger model's memory, too large overflows a smaller one and the answer
+// comes back having forgotten its own beginning.
+export const HELIX_DEFAULT_MESH_CONTEXT = 8192
+export const HELIX_MAX_MESH_CONTEXT = 131072
+
+export function helixMeshContext(): number {
+    const raw = mmkv.getString(HelixKeys.meshContext)
+    const n = raw ? Number(raw) : NaN
+    if (!Number.isFinite(n) || n < 1024 || n > HELIX_MAX_MESH_CONTEXT) return HELIX_DEFAULT_MESH_CONTEXT
+    return Math.floor(n)
 }
 
 export function helixMemoryProfile(): MemoryProfile {

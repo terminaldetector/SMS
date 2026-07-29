@@ -96,7 +96,12 @@ const ModelSettings: React.FC<ModelSettingsProp> = ({ modelImporting, modelLoadi
                         value={config.context_length}
                         onValueChange={(value) => setConfig({ ...config, context_length: value })}
                         min={1024}
-                        max={32768}
+                        // 32k was the ceiling while a phone ran a model alone, and it is the wrong
+                        // ceiling now: sharding exists precisely so the context can be larger than
+                        // one device. Whether a given phone survives its choice is a memory
+                        // question the loader already answers by failing — capping the slider
+                        // below what the hardware can do just hides the models that need it.
+                        max={131072}
                         step={1024}
                         disabled={modelImporting || modelLoading}
                     />

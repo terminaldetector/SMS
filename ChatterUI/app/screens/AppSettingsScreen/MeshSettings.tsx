@@ -14,13 +14,15 @@ import { Text, View } from 'react-native'
 import { useMMKVString } from 'react-native-mmkv'
 
 import ThemedButton from '@components/buttons/ThemedButton'
-import ThemedTextInput from '@components/input/ThemedTextInput'
 import HorizontalSelector from '@components/input/HorizontalSelector'
+import ThemedTextInput from '@components/input/ThemedTextInput'
 import SectionTitle from '@components/text/SectionTitle'
 import {
     HELIX_DEFAULT_PORT,
     HELIX_DEFAULT_RPC_PORT,
+    HELIX_DEFAULT_MESH_CONTEXT,
     HELIX_DEFAULT_SECRET,
+    HELIX_MAX_MESH_CONTEXT,
     HelixKeys,
     MEMORY_PROFILE_FRACTION,
     MemoryProfile,
@@ -40,6 +42,7 @@ const MeshSettings = () => {
     const [port, setPort] = useMMKVString(HelixKeys.port)
     const [rpcPort, setRpcPort] = useMMKVString(HelixKeys.rpcPort)
     const [secret, setSecret] = useMMKVString(HelixKeys.secret)
+    const [meshContext, setMeshContext] = useMMKVString(HelixKeys.meshContext)
     const [, setMemoryProfile] = useMMKVString(HelixKeys.memoryProfile)
     const profile = helixMemoryProfile()
 
@@ -103,6 +106,21 @@ const MeshSettings = () => {
                 </Text>
             )}
 
+            <ThemedTextInput
+                label="Pointer context budget (tokens)"
+                value={meshContext ?? ''}
+                onChangeText={setMeshContext}
+                placeholder={String(HELIX_DEFAULT_MESH_CONTEXT)}
+                keyboardType="number-pad"
+                containerStyle={{ marginTop: spacing.m }}
+                description="How much conversation history a Pointer chat sends. The answering phone's model is its own, and the protocol announces memory and an address but not a context window — so this is a number you set, not one that can be read."
+            />
+            {!!meshContext && Number(meshContext) > HELIX_MAX_MESH_CONTEXT && (
+                <Text style={warn}>
+                    {`Above ${HELIX_MAX_MESH_CONTEXT} — ${HELIX_DEFAULT_MESH_CONTEXT} will be used instead.`}
+                </Text>
+            )}
+
             <View style={{ marginTop: spacing.l }}>
                 <Text style={{ color: color.text._100 }}>Memory this phone lends</Text>
                 <HorizontalSelector
@@ -131,8 +149,8 @@ const MeshSettings = () => {
                 buttonStyle={{ marginTop: spacing.l }}
             />
             <Text style={dim}>
-                Context length, threads and layers per model live in Models, under "Show Settings".
-                They apply to whatever this phone runs, meshed or alone.
+                Context length, threads and layers per model live in Models, under &quot;Show
+                Settings&quot;. They apply to whatever this phone runs, meshed or alone.
             </Text>
         </View>
     )
