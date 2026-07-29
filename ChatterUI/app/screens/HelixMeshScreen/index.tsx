@@ -38,8 +38,15 @@ import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
+    formatShardLoaded,
+    formatShardMemory,
+    formatShardPlan,
+    ShardDeviceMemory,
+} from '@lib/helixShardLog'
+import {
     HelixKeys,
     helixMemoryFraction,
+    helixMemoryProfile,
     helixPort,
     helixRpcPort,
     helixSecret,
@@ -123,25 +130,53 @@ export interface DeviceMemory {
 // availability instead, minus Android's own low-memory threshold (below which it starts killing
 // processes) and a margin, so a worker survives the inference it just agreed to take part in.
 function deviceMemory(): DeviceMemory {
+    const r = deviceMemoryReport()
+    return { total: r.total, usable: r.usable, low: r.low }
+}
+
+// The same reading with every intermediate step kept, for the log. One function rather than two so
+// what is logged is by construction what was announced — a report that could disagree with the
+// number actually used would be worse than no report.
+function deviceMemoryReport(): ShardDeviceMemory {
     const total = deviceTotalMemory()
+    const fraction = helixMemoryFraction()
+    const profile = helixMemoryProfile()
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const info = require('../../../modules/bitchat-ble').BitchatBle?.getMemoryInfo?.()
         if (info && Number(info.available) > 0) {
-            const headroom = Number(info.available) - Number(info.threshold ?? 0)
+            const available = Number(info.available)
+            const threshold = Number(info.threshold ?? 0)
+            const headroom = available - threshold
             // Only a fraction of the remaining headroom: weights are not the only thing that grows
             // during inference (KV cache, compute buffers), and being killed mid-answer is worse
             // than taking one layer fewer. How large a fraction is the Settings knob — two thirds
             // by default, since the right answer depends on what else the phone is doing.
-            const usable = Math.max(0, Math.floor(headroom * helixMemoryFraction()))
-            return { total: Number(info.total) || total, usable, low: !!info.low }
+            return {
+                total: Number(info.total) || total,
+                available,
+                threshold,
+                low: !!info.low,
+                usable: Math.max(0, Math.floor(headroom * fraction)),
+                profile,
+                fraction,
+            }
         }
     } catch {
         /* fall through to the paper figure below */
     }
     // No native module (or it could not answer): a conservative slice of total is still closer to
-    // the truth than total itself, which no device ever has free.
-    return { total, usable: Math.floor(total * 0.25), low: false }
+    // the truth than total itself, which no device ever has free. Reported as such rather than
+    // dressed up as a live reading — a plan built on a guess should say it was.
+    return {
+        total,
+        available: 0,
+        threshold: 0,
+        low: false,
+        usable: Math.floor(total * 0.25),
+        profile: `${profile} (estimated — no live memory reading)`,
+        fraction: 0.25,
+    }
 }
 
 // Lazily required so an APK without the module fails with a clear message rather than at import
@@ -623,7 +658,32 @@ const HelixMeshScreen = () => {
     // Poll the coordinator's joined agents while hosting.
     useEffect(() => {
         if (!hosting) return
-        const t = setInterval(() => setHostAgents(coordRef.current?.agents() ?? []), 1000)
+        // Logged on change, not every tick. What a phone announced — free memory and whether it
+        // offered an rpc address at all — is exactly what the split will be weighted by, and a
+        // phone that joins without one is the difference between "lends its RAM" and "watches".
+        // That distinction has been invisible before, and looked like the mesh losing devices.
+        let seen = ''
+        const t = setInterval(() => {
+            const coord = coordRef.current
+            const ids = coord?.agents() ?? []
+            setHostAgents(ids)
+            const info = coord?.agentInfo() ?? []
+            const key = info.map((a) => `${a.id}|${a.mem}|${a.rpc ?? ''}`).join(';')
+            if (key === seen) return
+            seen = key
+            Logger.info(
+                info.length === 0
+                    ? 'Mesh: no phones joined'
+                    : 'Mesh joined:\n' +
+                          info
+                              .map(
+                                  (a) =>
+                                      `  ${a.id}: ${(a.mem / 1024 ** 3).toFixed(2)} GB free, ` +
+                                      (a.rpc ? `layers at ${a.rpc}` : 'NO rpc address — cannot hold layers')
+                              )
+                              .join('\n')
+            )
+        }, 1000)
         return () => clearInterval(t)
     }, [hosting])
 
@@ -809,6 +869,10 @@ const HelixMeshScreen = () => {
             // Announce it so the host can place layers here. If we've already joined, patch the
             // live card; otherwise onJoinAgent picks it up when joining.
             agentRef.current?.updateCard({ rpc: addr, mem: deviceMemory().usable })
+            // The number this phone is about to be planned against, with the steps that produced
+            // it. The host's plan is only ever as good as this, and it is derived through several
+            // stages that are each invisible on their own.
+            Logger.info('\n' + formatShardMemory(deviceMemoryReport(), addr))
             Logger.infoToast(`Sharing compute — ${addr}`)
         } catch (e) {
             Logger.errorToast(`Shard worker failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -846,10 +910,27 @@ const HelixMeshScreen = () => {
                 Logger.errorToast("Couldn't read the model's layer count from its GGUF")
                 return
             }
+            const hostNode = {
+                id: `host-${agentId}`,
+                mem: deviceMemory().usable,
+                rpc: `${hostIp}:${rpcPort}`,
+            }
+            const workers = coord.agentInfo()
             const plan = planLocalShard(
                 { model_id: model.name, n_layers: nLayers, model_bytes: model.file_size },
-                { id: `host-${agentId}`, mem: deviceMemory().usable, rpc: `${hostIp}:${rpcPort}` },
-                coord.agentInfo()
+                hostNode,
+                workers
+            )
+            // The whole plan goes to the log before the load is attempted. A split that turns out
+            // wrong is nearly impossible to diagnose afterwards — the model loads and answers
+            // either way — so the numbers it was made from have to be recorded while they exist.
+            Logger.info(
+                '\n' +
+                    formatShardPlan(
+                        plan,
+                        { name: model.name, bytes: model.file_size, layers: nLayers },
+                        [hostNode, ...workers.map((w) => ({ id: w.id, mem: w.mem, rpc: w.rpc ?? '' }))]
+                    )
             )
             setShardPlan(
                 plan.endpoints
@@ -862,12 +943,24 @@ const HelixMeshScreen = () => {
             // is now the normal case.
             if (Llama.useLlamaModelStore.getState().context)
                 await Llama.useLlamaModelStore.getState().unload()
+            const startedAt = Date.now()
             await Llama.useLlamaModelStore.getState().load(model, {
                 rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
                 tensor_split: plan.tensor_split,
                 // Without this every layer stays on this phone regardless of the split.
                 n_layers: nLayers,
             })
+            // What the load actually did, as opposed to what it was asked to do. `sharded` false
+            // here means the load fell through to the ordinary path and the split was never taken.
+            Logger.info(
+                '\n' +
+                    formatShardLoaded(
+                        plan,
+                        nLayers,
+                        Date.now() - startedAt,
+                        Llama.useLlamaModelStore.getState().sharded
+                    )
+            )
             Logger.infoToast(`Sharded across ${plan.ring.length} phones`)
         } catch (e) {
             Logger.errorToast(`Shard failed: ${e instanceof Error ? e.message : String(e)}`)
