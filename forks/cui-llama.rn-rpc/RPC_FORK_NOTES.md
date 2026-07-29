@@ -39,11 +39,27 @@ symbol renamed to `lm_ggml_`/`LM_GGML_` to avoid clashing with other copies of g
 - **G — `tensor_split`** (added after the initial A-F pass, wiring this fork into HELIX):
   `cpp/jsi/JSIParams.cpp`'s `parseCommonParams` now reads a `tensor_split: number[]` field and
   copies it into `common_params.tensor_split[128]` (that field already existed upstream — plain
-  data, no `ggml_` symbols to rename, so no CMake/vendoring changes needed). Order matches
-  `getFilteredDefaultDevices()`'s device list: `[local device, rpc_servers[0], rpc_servers[1], ...]`
-  — exactly the `[main-local, worker0, worker1, ...]` order HELIX's `rpc_cluster.py` plans emit as
-  `tensor_split`. `src/types.ts` — added `tensor_split?: Array<number>` next to `rpc_servers`;
-  `initLlama()`'s existing `...rest` spread (`src/index.ts`) forwards it with no further changes.
+  data, no `ggml_` symbols to rename, so no CMake/vendoring changes needed). `src/types.ts` — added
+  `tensor_split?: Array<number>` next to `rpc_servers`; `initLlama()`'s existing `...rest` spread
+  (`src/index.ts`) forwards it with no further changes.
+- **H — `addRpcServers()`, and what `tensor_split` is actually indexed by**: the note under G used
+  to say the ratios span `[local device, rpc_servers[0], …]`, matching HELIX's
+  `[main-local, worker0, …]`. That is wrong, and it is worth being explicit about because it is the
+  kind of wrong that produces a working-looking mesh. `cpp/llama-model.cpp`'s `load_tensors` copies
+  `tensor_split` over `model->devices`, which `cpp/llama.cpp` builds as
+  `[RPC devices…, local GPUs…]` — **the local CPU is not a device, and nothing in the list stands
+  for the driving machine**. What stays local is decided separately, by `n_gpu_layers`: only the
+  last `n_gpu_layers` layer slots (counting llama.cpp's output layer as one) are eligible to leave,
+  and those are what the ratios divide. So a plan's `[main, worker]` ratios arrived as
+  `[worker0, worker1]` — the driver's share went to the first worker, the last worker's share fell
+  off the end — and with a single worker the whole split collapsed onto that one phone.
+  New JSI global `llamaAddRpcServers(endpoints)` → `addRpcServers()` in `src/index.ts` registers the
+  endpoints ahead of the load and returns, per endpoint, the ggml device names it contributed plus
+  their reported free/total memory. Two things were previously unknowable from JS and are both
+  needed by anything dividing a model: whether an endpoint answered at all (an unreachable one
+  contributes nothing, and the load then succeeds *locally*, silently), and how many devices sit
+  behind one address (a phone serving its CPU and its GPU is two `tensor_split` entries, not one).
+  The returned names can also be passed as `devices` to pin the split to exactly those.
 - **F — worker side (`startRpcServer`)**: new JSI global `llamaStartRpcServer(endpoint, options?)`
   in `cpp/jsi/RNLlamaJSI.cpp`, exposed as `startRpcServer()` in `src/index.ts`. It resolves which
   local backend devices to expose (`options.devices` by name, or every device that isn't itself a

@@ -14,6 +14,7 @@
 // Pure string formatting on purpose: no React Native imports, so CI can run it against real plans.
 
 import type { RpcClusterPlan } from './helixPlacement'
+import type { ShardLlamaArgs } from './helixShardArgs'
 
 export interface ShardLogNode {
     id: string
@@ -139,13 +140,15 @@ export function formatShardPlan(
                 (perLayer > 0 && n
                     ? `, needs ~${gb(needs)}${needs > n.mem ? '  ← MORE THAN IT OFFERED' : ''}`
                     : '') +
-                `\n    at ${e.addr || (e.role === 'main' ? 'local' : 'no address')}`
+                // The main node holds its band on its own CPU — it is never dialled over RPC, so
+                // printing an address for it reads as "these layers travel", which they do not.
+                `\n    ${e.role === 'main' ? 'held here, on this CPU' : `at ${e.addr || 'no address'}`}`
         )
     }
 
     lines.push('')
     lines.push(`--rpc: ${plan.rpc_arg || '(none — nothing will leave this phone)'}`)
-    lines.push(`--tensor-split: ${plan.tensor_split.map((x) => x.toFixed(4)).join(', ')}`)
+    lines.push(`ring ratios: ${plan.tensor_split.map((x) => x.toFixed(4)).join(', ')}`)
 
     const problems = checkShardPlan(plan, nodes)
     if (problems.length) {
@@ -192,24 +195,69 @@ export function formatShardMemory(m: ShardDeviceMemory, rpcAddr?: string): strin
     ].join('\n')
 }
 
+/**
+ * The plan as llama.cpp will read it — the translation, written out beside the plan it came from.
+ *
+ * The plan and these arguments describe the same split in two different vocabularies, and the whole
+ * class of bug this file exists for lived in the gap between them: ratios that span the ring versus
+ * ratios that span devices, a layer count versus a count of layers allowed to leave. Printing both
+ * is the only way a reader can see that the translation happened and check it by eye.
+ */
+export function formatShardArgs(args: ShardLlamaArgs, nLayers: number): string {
+    const lines = ['------ SHARD ARGS (what llama.cpp is told) -----']
+    lines.push(`This phone keeps layers 0–${args.host_layers - 1} (${args.host_layers}) on its own CPU`)
+    lines.push(
+        `Offloaded: ${args.remote_layers} layers + the output layer, across ` +
+            `${args.workers.length} worker(s) / ${args.devices.length} remote device(s)`
+    )
+    for (const w of args.workers) {
+        lines.push(
+            `  ${w.node} at ${w.endpoint}: ${w.layers} layers, ${(w.ratio * 100).toFixed(1)}% of the ` +
+                `offloaded tail, on ${w.devices.join(' + ')}`
+        )
+    }
+    lines.push(`--rpc: ${args.rpc_servers.join(',') || '(none)'}`)
+    lines.push(`--tensor-split: ${args.tensor_split.map((x) => x.toFixed(4)).join(', ')}`)
+    lines.push(`--device: ${args.devices.join(', ') || '(none)'}`)
+    lines.push(`-ngl: ${args.n_gpu_layers} (of ${nLayers} layers + 1 output)`)
+    if (args.tensor_split.length !== args.devices.length)
+        lines.push('  ! one ratio per device is the whole point — these two lists disagree')
+    lines.push('------ END SHARD ARGS -----')
+    return lines.join('\n')
+}
+
 /** What the context reports after a sharded load — the check that the split was actually taken. */
 export function formatShardLoaded(
     plan: RpcClusterPlan,
-    gpuLayers: number,
+    args: ShardLlamaArgs,
     loadMs: number,
-    sharded: boolean
+    sharded: boolean,
+    usedDevices: string[]
 ): string {
+    const remote = usedDevices.filter((d) => /^RPC\d*/i.test(d))
     const lines = [
         '------ SHARD LOADED -----',
         `Took ${(loadMs / 1000).toFixed(1)}s`,
         `Context marked sharded: ${sharded}`,
-        `n_gpu_layers requested: ${gpuLayers} of ${plan.n_layers}`,
-        `Workers: ${plan.ring.length - 1}`,
+        `n_gpu_layers requested: ${args.n_gpu_layers} (of ${plan.n_layers} layers + 1 output)`,
+        `Devices the model loaded onto: ${usedDevices.join(', ') || '(none reported)'}`,
+        // Counted from what llama.cpp came back with, not from the plan. The plan's worker count was
+        // printed here before, which meant this line said "Workers: 1" just as loudly when no worker
+        // had been reached at all — the exact failure it was supposed to catch.
+        `Remote devices holding layers: ${remote.length} of ${args.devices.length} planned`,
     ]
-    // The failure that cost the most time: layers eligible to leave the phone were capped at 0, so
-    // the split was planned, logged, and then quietly ignored by llama.cpp.
-    if (gpuLayers <= 0)
+    if (args.n_gpu_layers <= 0)
         lines.push('  ! n_gpu_layers is 0 — NOTHING left this phone, the model is loaded whole here')
+    if (remote.length === 0)
+        lines.push(
+            '  ! no remote device held a layer — this is a LOCAL load. The workers were unreachable, ' +
+                'or stopped sharing their RAM'
+        )
+    else if (remote.length < args.devices.length)
+        lines.push(
+            `  ! ${args.devices.length - remote.length} planned remote device(s) are missing — their ` +
+                'layers fell back onto this phone'
+        )
     if (plan.ring.length <= 1)
         lines.push('  ! the ring is one node — this is a normal local load, not a shard')
     lines.push('------ END SHARD LOADED -----')

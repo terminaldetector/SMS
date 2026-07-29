@@ -13,6 +13,7 @@ import { Storage } from '@lib/enums/Storage'
 import { AppDirectory, fileExists, readableFileSize, writeBase64File } from '@lib/utils/File'
 import { ModelDataType } from 'db/schema'
 
+import { rpcDevicesUsed } from '../../helixShardArgs'
 import { checkGGMLDeprecated } from './GGML'
 import { KV, Model } from './Model'
 import { AppSettings } from '../../constants/GlobalValues'
@@ -36,17 +37,29 @@ export type CompletionOutput = {
     timings: CompletionTimings
 }
 
-// Topology for a distributed (sharded) load — comes from HELIX's planner, see lib/helixPlacement.ts.
+// What a distributed (sharded) load needs, already translated into llama.cpp's own terms by
+// lib/helixShardArgs.ts. Deliberately not the HELIX plan: the plan describes the ring, and these
+// are the three numbers llama.cpp obeys, which do not mean what the plan's fields look like they
+// mean (see helixShardArgs.ts — the difference is why a two-phone mesh ran on one phone).
 export type ShardParams = {
     rpc_servers: string[] // worker "host:port" rpc-servers, ring order
-    tensor_split: number[] // ratios across [this phone, worker0, worker1, …]
-    n_layers?: number // the model's block count, so every layer is eligible for placement
+    /** One ratio per REMOTE DEVICE, in `devices` order, over the offloaded layers alone. */
+    tensor_split: number[]
+    /** The remote devices by name ("RPC0", …), so nothing local can join the split. */
+    devices: string[]
+    /** How many trailing layers may leave this phone — the rest stay on its CPU. */
+    n_gpu_layers: number
 }
 
 export type LlamaState = {
     context: LlamaContext | undefined
-    /** True when `context` was loaded split across the mesh rather than wholly on this phone. */
+    /**
+     * True when `context` really is split across the mesh — i.e. the load was asked to shard AND
+     * remote devices turned up in what it loaded onto. Intent alone is not enough: see load().
+     */
     sharded: boolean
+    /** The remote devices ("RPC0", …) actually holding layers, empty for a local load. */
+    shardDevices: string[]
     model?: ModelDataType
     mmproj?: ModelDataType
     loadProgress: number
@@ -151,6 +164,7 @@ export namespace Llama {
     export const useLlamaModelStore = create<LlamaState>()((set, get) => ({
         context: undefined,
         sharded: false,
+        shardDevices: [],
         loadProgress: 0,
         chatCount: 0,
         promptCache: undefined,
@@ -186,31 +200,33 @@ export namespace Llama {
                 n_threads: config.threads,
                 n_batch: config.batch,
                 ctx_shift: config.ctx_shift,
-                // llama.cpp registers each rpc-server as an OFFLOAD device, and n_gpu_layers is
-                // what decides how many layers are eligible to leave the local CPU. At the app's
-                // usual 0, none are — so tensor_split has nothing to divide and this phone loads
-                // and runs the whole model itself, which is the opposite of sharding. Every layer
-                // has to be placeable for the split to mean anything; 99 is llama.cpp's own
-                // "all of them" idiom and is clamped to the real block count.
-                n_gpu_layers: shard ? (shard.n_layers && shard.n_layers > 0 ? shard.n_layers : 99) : config.gpu_layers,
+                // n_gpu_layers is how many TRAILING layers may leave the local CPU. For an ordinary
+                // load that is the user's GPU-offload setting; for a shard it is the size of the
+                // remote bands, computed from the plan (helixShardArgs.ts). The app's usual 0 means
+                // nothing leaves, so a shard loaded with it was simply a local load with extra logs.
+                n_gpu_layers: shard ? shard.n_gpu_layers : config.gpu_layers,
                 // mlock pins the whole file in this phone's physical RAM. That is exactly the
                 // memory a shard is meant not to need, so it stays off when sharding; mmap remains
                 // on either way, letting the tensors bound for a worker stream from the file
                 // instead of being materialised here first.
                 use_mlock: !shard,
                 use_mmap: true,
-                devices: config.devices,
+                // A shard pins the device list to the workers' RPC devices. The user's own device
+                // choice is for a single-phone load, and honouring it here would drop the remote
+                // devices out of the split entirely — the model would load whole, locally, with
+                // every log line still saying "sharded".
+                devices: shard ? shard.devices : config.devices,
                 // Present only for a sharded load: llama.cpp registers each rpc-server as a remote
-                // device and splits the layers by these ratios.
+                // device and splits the offloaded layers by these ratios.
                 ...(shard ? { rpc_servers: shard.rpc_servers, tensor_split: shard.tensor_split } : {}),
             }
 
             Logger.info(
                 `\n------ MODEL LOAD -----\n Model Name: ${model.name}\nStarting with parameters: \nContext Length: ${params.n_ctx}\nThreads: ${params.n_threads}\nBatch Size: ${params.n_batch}\nGPU Layers: ${params.n_gpu_layers}` +
                     (shard
-                        ? `\nSharded across: ${shard.rpc_servers.join(', ')}\nTensor split: ${shard.tensor_split
-                              .map((x) => x.toFixed(3))
-                              .join(', ')}`
+                        ? `\nSharded across: ${shard.rpc_servers.join(', ')}` +
+                          `\nRemote devices: ${shard.devices.join(', ') || '(none)'}` +
+                          `\nTensor split: ${shard.tensor_split.map((x) => x.toFixed(3)).join(', ')}`
                         : '')
             )
 
@@ -227,9 +243,26 @@ export namespace Llama {
 
             if (!llamaContext) return
 
+            // Which devices the model ENDED UP on, not which were asked for. A shard whose workers
+            // were unreachable loads perfectly well — wholly on this phone — and every other signal
+            // (the plan, the params, the "sharded" flag) still reads as a split. This is the one
+            // place the difference is observable, so `sharded` is decided by it rather than by intent.
+            const usedRpc = shard ? rpcDevicesUsed(llamaContext.devices) : []
+            if (shard && usedRpc.length === 0) {
+                Logger.errorToast(
+                    'The shard loaded on this phone alone — no worker held any layers. Check the ' +
+                        'other phone is still sharing its RAM on the same Wi-Fi.'
+                )
+                Logger.error(
+                    `Sharded load used devices [${(llamaContext.devices ?? []).join(', ') || 'none'}] — ` +
+                        `none of the requested rpc-servers (${shard.rpc_servers.join(', ')}) contributed one`
+                )
+            }
+
             set({
                 context: llamaContext,
-                sharded: !!shard,
+                sharded: usedRpc.length > 0,
+                shardDevices: usedRpc,
                 model: model,
                 chatCount: 1,
             })
@@ -280,6 +313,7 @@ export namespace Llama {
             set({
                 context: undefined,
                 sharded: false,
+                shardDevices: [],
                 model: undefined,
                 mmproj: undefined,
             })

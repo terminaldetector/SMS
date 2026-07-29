@@ -6,6 +6,8 @@
 // Sharder runs this phone's own context, which happens to have most of its layers somewhere else.
 
 import { Llama } from './engine/Local/LlamaLocal'
+import type { MeshSend } from './helixChatTokens'
+import { cleanMeshAnswer } from './helixPrompt'
 import { meshSession, MeshMode } from './helixSession'
 
 export interface MeshRunOptions {
@@ -16,8 +18,8 @@ export interface MeshRunOptions {
 
 export async function runMeshTurn(
     mode: MeshMode,
-    prompt: string,
-    { images = [], nPredict = 256, onToken }: MeshRunOptions = {}
+    send: MeshSend,
+    { images = [], nPredict = 512, onToken }: MeshRunOptions = {}
 ): Promise<string> {
     if (mode === 'pointer') {
         const coord = meshSession.coord
@@ -26,7 +28,7 @@ export async function runMeshTurn(
         // No stream: an agent returns its answer whole. Rather than fake a stream by chopping the
         // finished text, the caller simply gets one chunk — a progress bar made of an answer that
         // already arrived would be a lie about where the waiting happened.
-        const answer = await coord.infer(prompt, meshSession.answerMode)
+        const answer = await coord.infer(send.prompt, meshSession.answerMode)
         onToken?.(answer)
         return answer
     }
@@ -36,7 +38,13 @@ export async function runMeshTurn(
     let out = ''
     await store.completion(
         {
-            prompt,
+            // `messages` when the model has a chat template: the native side then applies the
+            // template, its end-of-turn token and its own extra stops. `prompt` is the same text
+            // already formatted — passing both would format twice, so it is one or the other.
+            ...(send.messages
+                ? { messages: send.messages, jinja: true, enable_thinking: false }
+                : { prompt: send.prompt }),
+            stop: send.stop,
             n_predict: nPredict,
             // Only when there is a projector — the store warns and drops them otherwise, and a
             // silently ignored image looks exactly like a model that cannot see.
@@ -50,7 +58,7 @@ export async function runMeshTurn(
         },
         () => {}
     )
-    return out.trim()
+    return cleanMeshAnswer(out, send.formatting)
 }
 
 /** Why this mode cannot answer right now, or undefined when it can. */

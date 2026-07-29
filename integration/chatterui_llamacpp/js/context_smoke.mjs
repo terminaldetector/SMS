@@ -8,7 +8,14 @@
 //
 //   node integration/chatterui_llamacpp/js/context_smoke.mjs
 
-import { buildBranchPrompt, estimateTokens } from '../../../ChatterUI/lib/helixPrompt.ts'
+import {
+  buildBranchPrompt,
+  cleanMeshAnswer,
+  estimateTokens,
+  MESH_PLAIN_STOPS,
+  MESH_SYSTEM_PROMPT,
+  messagesFromTurns,
+} from '../../../ChatterUI/lib/helixPrompt.ts'
 
 let pass = 0
 const check = (c, w) => { if (!c) throw new Error('FAIL: ' + w); pass++; console.log('  ok  ' + w) }
@@ -80,6 +87,54 @@ const turn = (role, text) => ({ role, text, at: 0 })
 {
   const built = buildBranchPrompt([turn('user', 'hello there')], 16)
   check(built.prompt.includes('hello there'), 'an absurdly small budget still sends the newest turn')
+}
+
+// --- the priming a model with a chat template gets ---
+//
+// The plain form above is a completion prompt: turns labelled by hand, ending in `Assistant:`. Handed
+// to an instruction-tuned model it invites exactly what the phones showed — an answer, then `User:`,
+// then another answer, both sides invented until the token budget ran out. A model with a template
+// gets messages instead, and a system turn that says to answer and stop.
+{
+  const msgs = messagesFromTurns([turn('user', 'hi'), turn('assistant', 'hello'), turn('user', 'again?')])
+  check(msgs[0].role === 'system', 'the conversation opens with a system turn')
+  check(msgs[0].content === MESH_SYSTEM_PROMPT, 'and it is the mesh chat instruction, not a persona')
+  check(
+    JSON.stringify(msgs.slice(1).map((m) => m.role)) === JSON.stringify(['user', 'assistant', 'user']),
+    'the turns follow in order, with their own roles'
+  )
+  check(
+    msgs.every((m) => !/^(User|Assistant):/.test(m.content)),
+    'no hand-written role labels survive into a templated message — that is the template\'s job'
+  )
+  check(messagesFromTurns([], '').length === 0, 'the system turn can be left out')
+}
+
+// --- stops exist at all, which is the fix for the loop ---
+{
+  check(MESH_PLAIN_STOPS.includes('\nUser:'), 'the plain form stops when the model starts a user turn')
+  check(MESH_PLAIN_STOPS.includes('\nAssistant:'), 'and when it starts a second assistant turn')
+}
+
+// --- what reaches the screen ---
+{
+  check(
+    cleanMeshAnswer('<think>maybe this</think>The answer is 4.') === 'The answer is 4.',
+    'a reasoning block is not the answer and does not reach the transcript'
+  )
+  check(
+    cleanMeshAnswer('<think>cut off mid-thought') === '',
+    'an unclosed reasoning block leaves nothing to show, rather than showing the thinking'
+  )
+  check(
+    cleanMeshAnswer('Four.\nUser: and five?\nAssistant: Five.', 'plain') === 'Four.',
+    'a model that carried on writing both sides is trimmed back to its answer'
+  )
+  check(
+    cleanMeshAnswer('Ask the user: what next?', 'template') === 'Ask the user: what next?',
+    'a colon in ordinary prose is not mistaken for a role label'
+  )
+  check(cleanMeshAnswer('  spaced  ') === 'spaced', 'the answer is trimmed')
 }
 
 console.log(`\nALL PASSED (${pass} checks)`)

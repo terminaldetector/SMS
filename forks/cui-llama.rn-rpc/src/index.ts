@@ -26,6 +26,7 @@ import type {
   NativeSpeculativeType,
   ParallelStatus,
   ParallelRequestStatus,
+  RpcServerRegistration,
 } from './types'
 import { BUILD_NUMBER, BUILD_COMMIT } from './version'
 
@@ -72,6 +73,7 @@ export type {
   NativeSpeculativeType,
   ParallelStatus,
   ParallelRequestStatus,
+  RpcServerRegistration,
 }
 
 export const RNLLAMA_MTMD_DEFAULT_MEDIA_MARKER = '<__media__>'
@@ -88,6 +90,7 @@ const jsiBindingKeys = [
   'llamaModelInfo',
   'llamaGetBackendDevicesInfo',
   'llamaStartRpcServer',
+  'llamaAddRpcServers',
   'llamaLoadSession',
   'llamaSaveSession',
   'llamaTokenize',
@@ -1213,6 +1216,29 @@ export async function startRpcServer(
   await installJsi()
   const { llamaStartRpcServer } = getJsi()
   return llamaStartRpcServer(endpoint, options)
+}
+
+/**
+ * Registers remote `ggml-rpc` endpoints as backend devices and reports what each one contributed.
+ *
+ * `initLlama({ rpc_servers })` registers them too, so this is only needed when the caller has to
+ * KNOW the outcome before loading — which anything dividing a model does, for two reasons:
+ *
+ *  - An endpoint that cannot be reached contributes no devices, and the load then quietly succeeds
+ *    with the whole model on the local device. Nothing afterwards distinguishes that from a split.
+ *  - `tensor_split` is indexed by device, and one endpoint can serve several devices (a phone
+ *    offering both its CPU and its GPU). The returned `devices` per endpoint are what the ratios
+ *    have to line up with, and they can also be passed as `devices` to pin the split to them.
+ *
+ * Registration is idempotent per endpoint, so calling this before `initLlama` costs one round-trip
+ * and does not register anything twice.
+ */
+export async function addRpcServers(
+  endpoints: string[],
+): Promise<Array<RpcServerRegistration>> {
+  await installJsi()
+  const { llamaAddRpcServers } = getJsi()
+  return llamaAddRpcServers(endpoints)
 }
 
 export async function initLlama(

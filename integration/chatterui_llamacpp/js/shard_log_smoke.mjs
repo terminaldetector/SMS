@@ -10,8 +10,9 @@
 //
 //   node integration/chatterui_llamacpp/js/shard_log_smoke.mjs
 
-import { checkShardPlan, formatShardMemory, formatShardPlan, formatShardLoaded } from '../../../ChatterUI/lib/helixShardLog.ts'
+import { checkShardPlan, formatShardArgs, formatShardMemory, formatShardPlan, formatShardLoaded } from '../../../ChatterUI/lib/helixShardLog.ts'
 import { planRpcCluster } from '../../../ChatterUI/lib/helixPlacement.ts'
+import { shardLlamaArgs } from '../../../ChatterUI/lib/helixShardArgs.ts'
 
 let pass = 0
 const check = (c, w) => { if (!c) throw new Error('FAIL: ' + w); pass++; console.log('  ok  ' + w) }
@@ -36,7 +37,11 @@ const nodes = [
   check(text.includes('SHARD PLAN'), 'the report is delimited so it can be found in a long log')
   check(text.includes('host → w1'), 'the ring is printed in pipeline order')
   check(text.includes('--rpc: 192.168.1.11:50052'), 'the exact --rpc argument is shown')
-  check(text.includes('--tensor-split:'), 'the exact tensor-split is shown')
+  check(text.includes('ring ratios:'), "each node's share of the whole model is shown")
+  check(
+    text.includes('held here, on this CPU'),
+    'the main node is shown holding its band locally, not as an address layers travel to'
+  )
   check(/layers \d+–\d+/.test(text), 'each node reports the layer band it was given')
   check(text.includes('36 layers'), "the model's layer count is stated")
   check(!text.includes('PROBLEMS:'), 'a sound plan does not invent problems')
@@ -99,22 +104,54 @@ const nodes = [
   check(problems.some((p) => p.includes('no free memory')), 'a node with no memory reading is caught')
 }
 
+// --- the arguments llama.cpp is actually given, printed beside the plan they came from ---
+const goodArgs = shardLlamaArgs(good, [{ endpoint: addrs.w1, devices: ['RPC0'] }])
+{
+  const text = formatShardArgs(goodArgs, 36)
+  check(text.includes('SHARD ARGS'), 'the translation is delimited so it can be found in a long log')
+  check(text.includes('--tensor-split: 1.0000'), 'the exact tensor-split llama.cpp receives is shown')
+  check(text.includes(`-ngl: ${goodArgs.n_gpu_layers}`), 'the exact -ngl is shown, since it decides what stays')
+  check(text.includes('--device: RPC0'), 'the remote devices the ratios refer to are named')
+  check(
+    text.includes(`keeps layers 0–${goodArgs.host_layers - 1}`),
+    'what this phone keeps is stated in layers, not implied by what it does not say'
+  )
+}
+
 // --- the load report catches the failure that cost the most time ---
 {
-  const text = formatShardLoaded(good, 0, 4200, true)
+  const text = formatShardLoaded(good, { ...goodArgs, n_gpu_layers: 0 }, 4200, true, ['RPC0'])
   check(
     text.includes('NOTHING left this phone'),
     'n_gpu_layers of 0 is called out — the split was planned and then ignored'
   )
-  const ok = formatShardLoaded(good, 36, 4200, true)
+  const ok = formatShardLoaded(good, goodArgs, 4200, true, ['RPC0'])
   check(!ok.includes('NOTHING left this phone'), 'a real split is not accused of being local')
   check(ok.includes('Context marked sharded: true'), 'the report states whether the context took the split')
+  check(ok.includes('Remote devices holding layers: 1 of 1'), 'the report counts devices that really held layers')
+}
+
+// --- the silent failure: everything asked for, nothing remote in what loaded ---
+{
+  const text = formatShardLoaded(good, goodArgs, 4200, false, ['CPU'])
+  check(
+    text.includes('this is a LOCAL load'),
+    'a shard that loaded with no remote device is named as a local load, not reported as 1 worker'
+  )
+  check(!text.includes('Remote devices holding layers: 1'), 'and it is not counted from the plan, which knew nothing')
+}
+
+// --- a worker that dropped out between planning and loading ---
+{
+  const twoDev = { ...goodArgs, devices: ['RPC0', 'RPC1'], tensor_split: [0.5, 0.5] }
+  const text = formatShardLoaded(good, twoDev, 4200, true, ['RPC0'])
+  check(text.includes('1 planned remote device(s) are missing'), 'a worker that fell out is flagged, not averaged over')
 }
 
 // --- one node is not a mesh ---
 {
   const solo = planRpcCluster({ host: { mem_bytes: 4 * GB } }, { host: addrs.host }, 'm', 36, GB, ['host'])
-  const text = formatShardLoaded(solo, 36, 100, true)
+  const text = formatShardLoaded(solo, goodArgs, 100, true, ['RPC0'])
   check(text.includes('the ring is one node'), 'a one-node ring is reported as a local load, not a shard')
 }
 

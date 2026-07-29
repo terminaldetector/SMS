@@ -404,25 +404,75 @@ namespace rnllama_jsi {
         return servers;
     }
 
-    static void registerRpcServers(const std::vector<std::string>& endpoints) {
+    // One endpoint's outcome: the ggml device names it contributed ("RPC0", …) and what each of
+    // them reports as free memory. Empty `devices` means the endpoint could not be reached.
+    struct RpcServerRegistration {
+        std::string endpoint;
+        std::vector<std::string> devices;
+        std::vector<size_t> freeMemory;
+        std::vector<size_t> totalMemory;
+    };
+
+    // The devices a single endpoint's reg contributed. Held per endpoint because --tensor-split is
+    // indexed by DEVICE, not by address: one phone serving both its CPU and its GPU appears as two
+    // devices behind one address, and a caller dividing a model has to know that before it loads.
+    static std::vector<lm_ggml_backend_dev_t> devicesOfReg(lm_ggml_backend_reg_t reg) {
+        std::vector<lm_ggml_backend_dev_t> devices;
+        if (reg == nullptr) {
+            return devices;
+        }
+        const size_t count = lm_ggml_backend_reg_dev_count(reg);
+        for (size_t i = 0; i < count; ++i) {
+            lm_ggml_backend_dev_t dev = lm_ggml_backend_reg_dev_get(reg, i);
+            if (dev != nullptr) {
+                devices.push_back(dev);
+            }
+        }
+        return devices;
+    }
+
+    static std::vector<RpcServerRegistration> registerRpcServersDetailed(const std::vector<std::string>& endpoints) {
         static std::mutex rpcMutex;
         std::lock_guard<std::mutex> lock(rpcMutex);
         auto& registered = registeredRpcServers();
+        std::vector<RpcServerRegistration> results;
         for (const auto& endpoint : endpoints) {
-            if (endpoint.empty() || registered.count(endpoint)) {
+            if (endpoint.empty()) {
                 continue;
             }
+            RpcServerRegistration result;
+            result.endpoint = endpoint;
+            // add_server() is idempotent per endpoint (it keeps its own reg map), so re-asking for
+            // an already-registered endpoint returns the same reg and its devices — which is how a
+            // second shard of the same mesh still learns the device names it needs.
             lm_ggml_backend_reg_t reg = lm_ggml_backend_rpc_add_server(endpoint.c_str());
             if (reg != nullptr) {
-                // add_server() only builds the reg; it must still be added to the global
-                // registry (mirrors upstream llama.cpp's --rpc handling in common/arg.cpp)
-                // before its devices show up via lm_ggml_backend_dev_count()/get().
-                lm_ggml_backend_register(reg);
-                registered.insert(endpoint);
+                if (!registered.count(endpoint)) {
+                    // add_server() only builds the reg; it must still be added to the global
+                    // registry (mirrors upstream llama.cpp's --rpc handling in common/arg.cpp)
+                    // before its devices show up via lm_ggml_backend_dev_count()/get().
+                    lm_ggml_backend_register(reg);
+                    registered.insert(endpoint);
+                }
+                for (auto dev : devicesOfReg(reg)) {
+                    const char* name = lm_ggml_backend_dev_name(dev);
+                    size_t freeMem = 0;
+                    size_t totalMem = 0;
+                    lm_ggml_backend_dev_memory(dev, &freeMem, &totalMem);
+                    result.devices.push_back(name ? name : "");
+                    result.freeMemory.push_back(freeMem);
+                    result.totalMemory.push_back(totalMem);
+                }
             } else {
                 logError("Failed to register RPC server: %s", endpoint.c_str());
             }
+            results.push_back(std::move(result));
         }
+        return results;
+    }
+
+    static void registerRpcServers(const std::vector<std::string>& endpoints) {
+        registerRpcServersDetailed(endpoints);
     }
     // Endpoints this process is already serving as an lm_ggml_backend_rpc_start_server() worker.
     // The server loop never returns (it accepts connections until the process dies), so this
@@ -502,6 +552,19 @@ namespace rnllama_jsi {
         return true;
     }
 #else
+    struct RpcServerRegistration {
+        std::string endpoint;
+        std::vector<std::string> devices;
+        std::vector<size_t> freeMemory;
+        std::vector<size_t> totalMemory;
+    };
+    static std::vector<RpcServerRegistration> registerRpcServersDetailed(const std::vector<std::string>& endpoints) {
+        std::vector<RpcServerRegistration> results;
+        for (const auto& endpoint : endpoints) {
+            results.push_back(RpcServerRegistration{endpoint, {}, {}, {}});
+        }
+        return results;
+    }
     static void registerRpcServers(const std::vector<std::string>&) {}
     static bool startRpcServerBackground(
         const std::string&,
@@ -871,6 +934,61 @@ namespace rnllama_jsi {
             }
         );
         runtime.global().setProperty(runtime, "llamaStartRpcServer", startRpcServer);
+
+        // Register remote rpc-servers BEFORE a model is loaded, and say what each one contributed.
+        //
+        // llamaInitContext registers `rpc_servers` itself, but by then it is too late to be told
+        // anything: a worker that cannot be reached registers nothing, llama.cpp quietly loads the
+        // whole model locally, and the only trace is one log line from deep in the backend. A
+        // caller splitting a model needs two facts first — that every worker answered, and how many
+        // devices each one is serving, since --tensor-split is indexed by device and one address can
+        // serve several. Both are only knowable from here.
+        auto addRpcServers = jsi::Function::createFromHostFunction(runtime,
+            jsi::PropNameID::forAscii(runtime, "llamaAddRpcServers"),
+            1,
+            [callInvoker](jsi::Runtime& runtime, const jsi::Value& thisValue, const jsi::Value* arguments, size_t count) -> jsi::Value {
+                if (count < 1 || !arguments[0].isObject() || !arguments[0].asObject(runtime).isArray(runtime)) {
+                    throw jsi::JSError(runtime, "llamaAddRpcServers: endpoints (array of \"host:port\") is required");
+                }
+                jsi::Array endpointsArr = arguments[0].asObject(runtime).asArray(runtime);
+                std::vector<std::string> endpoints;
+                for (size_t i = 0; i < endpointsArr.size(runtime); ++i) {
+                    auto val = endpointsArr.getValueAtIndex(runtime, i);
+                    if (val.isString()) {
+                        endpoints.push_back(val.asString(runtime).utf8(runtime));
+                    }
+                }
+
+                return createPromiseTask(runtime, callInvoker, [endpoints]() -> PromiseResultGenerator {
+                    ensureBackendInitialized();
+
+                    auto results = registerRpcServersDetailed(endpoints);
+
+                    return [results](jsi::Runtime& rt) {
+                        jsi::Array arr(rt, results.size());
+                        for (size_t i = 0; i < results.size(); ++i) {
+                            const auto& r = results[i];
+                            jsi::Object entry(rt);
+                            entry.setProperty(rt, "endpoint", jsi::String::createFromUtf8(rt, r.endpoint));
+                            entry.setProperty(rt, "devices", toJsStringArray(rt, r.devices));
+                            jsi::Array freeMem(rt, r.freeMemory.size());
+                            for (size_t d = 0; d < r.freeMemory.size(); ++d) {
+                                freeMem.setValueAtIndex(rt, d, jsi::Value((double) r.freeMemory[d]));
+                            }
+                            entry.setProperty(rt, "freeMemory", freeMem);
+                            jsi::Array totalMem(rt, r.totalMemory.size());
+                            for (size_t d = 0; d < r.totalMemory.size(); ++d) {
+                                totalMem.setValueAtIndex(rt, d, jsi::Value((double) r.totalMemory[d]));
+                            }
+                            entry.setProperty(rt, "totalMemory", totalMem);
+                            arr.setValueAtIndex(rt, i, entry);
+                        }
+                        return arr;
+                    };
+                }, -1, false);
+            }
+        );
+        runtime.global().setProperty(runtime, "llamaAddRpcServers", addRpcServers);
 
         auto loadSession = jsi::Function::createFromHostFunction(runtime,
             jsi::PropNameID::forAscii(runtime, "llamaLoadSession"),

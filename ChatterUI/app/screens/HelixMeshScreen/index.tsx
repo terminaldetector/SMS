@@ -38,11 +38,14 @@ import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
+    formatShardArgs,
     formatShardLoaded,
     formatShardMemory,
     formatShardPlan,
     ShardDeviceMemory,
 } from '@lib/helixShardLog'
+import { shardLlamaArgs } from '@lib/helixShardArgs'
+import type { RpcEndpointDevices } from '@lib/helixShardArgs'
 import {
     HelixKeys,
     helixMemoryFraction,
@@ -610,6 +613,45 @@ const HelixMeshScreen = () => {
         return () => clearInterval(t)
     }, [])
 
+    // Keep what this phone announced true for as long as it stays joined.
+    //
+    // The card was filled in once, at join: the free memory the host weighs the split by, and the
+    // address it will dial for layers. Both move. Free memory moves constantly — the host was
+    // planning against a figure minutes old, which is the number the whole memory-profile
+    // arithmetic exists to get right. The address moves whenever the network does, and this phone
+    // changes network by design: joining a host's direct hotspot gives it a new one. A worker that
+    // started sharing on its ordinary Wi-Fi and then joined a hotspot kept announcing the old
+    // address, so the host dialled somewhere unreachable — which used to end as a shard quietly
+    // running on the host alone.
+    useEffect(() => {
+        if (!agentJoined) return
+        let stopped = false
+        const t = setInterval(() => {
+            void (async () => {
+                const node = agentRef.current
+                if (!node || stopped) return
+                const patch: { mem: number; rpc?: string } = { mem: deviceMemory().usable }
+                if (shardRpcAddr) {
+                    const { ip } = await getLanIp()
+                    const addr = ip ? `${ip}:${rpcPort}` : ''
+                    if (addr && addr !== shardRpcAddr) {
+                        if (stopped) return
+                        setShardRpcAddr(addr)
+                        patch.rpc = addr
+                        Logger.info(
+                            `This phone's address changed — announcing layers at ${addr} (was ${shardRpcAddr})`
+                        )
+                    }
+                }
+                if (!stopped) node.updateCard(patch)
+            })()
+        }, 5000)
+        return () => {
+            stopped = true
+            clearInterval(t)
+        }
+    }, [agentJoined, shardRpcAddr, rpcPort])
+
     // The mesh's model list, refreshed when the screen opens and after a transfer lands.
     const refreshModels = async () => {
         try {
@@ -854,8 +896,30 @@ const HelixMeshScreen = () => {
         }
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const { startRpcServer } = require('cui-llama.rn')
-            const ok = await startRpcServer(`0.0.0.0:${rpcPort}`)
+            const { startRpcServer, getBackendDevicesInfo } = require('cui-llama.rn')
+            // Serve exactly one backend, and say which.
+            //
+            // By default the rpc-server offers every local device — on a phone that can mean its CPU
+            // and its GPU behind the same address, which the host then has to divide a band between.
+            // Both live in the same RAM, so there is nothing to gain and a real cost: the GPU
+            // backend may refuse a quantisation the CPU accepts, and those tensors then fall back
+            // across the network to the HOST's CPU instead of staying on this phone. One device also
+            // keeps the arithmetic honest — the memory this phone announced is system RAM, which is
+            // exactly what the CPU backend allocates from.
+            let serve: string[] = []
+            try {
+                const local: { deviceName: string; backend: string; type: string }[] =
+                    await getBackendDevicesInfo()
+                const cpu = local.find((d) => /cpu/i.test(d.type) || /^cpu$/i.test(d.deviceName))
+                if (cpu) serve = [cpu.deviceName]
+                Logger.info(
+                    `Local backends: ${local.map((d) => `${d.deviceName} (${d.backend}/${d.type})`).join(', ') || 'none'}` +
+                        `\nServing to the mesh: ${serve.join(', ') || 'every local device (could not identify the CPU)'}`
+                )
+            } catch {
+                /* older native module: fall back to serving whatever it picks by default */
+            }
+            const ok = await startRpcServer(`0.0.0.0:${rpcPort}`, serve.length ? { devices: serve } : undefined)
             if (!ok) {
                 // The native side only answers false for two reasons: this build has no RPC
                 // backend compiled in, or the backend registry offered no local device to serve.
@@ -932,9 +996,24 @@ const HelixMeshScreen = () => {
                         [hostNode, ...workers.map((w) => ({ id: w.id, mem: w.mem, rpc: w.rpc ?? '' }))]
                     )
             )
+            // Register the workers' rpc-servers before anything is loaded. This is the step that
+            // turns "the shard silently ran on this phone alone" into an error with an address in
+            // it: an endpoint nobody answers contributes no device, and a load that goes ahead
+            // anyway just puts the whole model here and succeeds. It also reports how many devices
+            // each worker is serving, which is what the split has to be indexed by.
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { addRpcServers } = require('cui-llama.rn')
+            const endpoints = plan.rpc_arg ? plan.rpc_arg.split(',').filter(Boolean) : []
+            const registered: RpcEndpointDevices[] = await addRpcServers(endpoints)
+            const args = shardLlamaArgs(plan, registered)
+            Logger.info('\n' + formatShardArgs(args, nLayers))
             setShardPlan(
                 plan.endpoints
-                    .map((e) => `${e.role === 'main' ? 'this phone' : e.node}: layers ${e.band[0]}–${e.band[1]}`)
+                    .map((e) =>
+                        e.role === 'main'
+                            ? `this phone: layers ${e.band[0]}–${e.band[1]} (kept here)`
+                            : `${e.node}: layers ${e.band[0]}–${e.band[1]}`
+                    )
                     .join('\n')
             )
             // Only if something is actually resident: load() refuses a model that is already
@@ -945,23 +1024,29 @@ const HelixMeshScreen = () => {
                 await Llama.useLlamaModelStore.getState().unload()
             const startedAt = Date.now()
             await Llama.useLlamaModelStore.getState().load(model, {
-                rpc_servers: plan.rpc_arg ? plan.rpc_arg.split(',') : [],
-                tensor_split: plan.tensor_split,
-                // Without this every layer stays on this phone regardless of the split.
-                n_layers: nLayers,
+                rpc_servers: args.rpc_servers,
+                tensor_split: args.tensor_split,
+                devices: args.devices,
+                n_gpu_layers: args.n_gpu_layers,
             })
-            // What the load actually did, as opposed to what it was asked to do. `sharded` false
-            // here means the load fell through to the ordinary path and the split was never taken.
+            // What the load actually did, as opposed to what it was asked to do — read back off the
+            // context's own device list, which is the only thing that knows.
+            const loaded = Llama.useLlamaModelStore.getState()
             Logger.info(
                 '\n' +
                     formatShardLoaded(
                         plan,
-                        nLayers,
+                        args,
                         Date.now() - startedAt,
-                        Llama.useLlamaModelStore.getState().sharded
+                        loaded.sharded,
+                        loaded.context?.devices ?? []
                     )
             )
-            Logger.infoToast(`Sharded across ${plan.ring.length} phones`)
+            if (!loaded.sharded) throw new Error('no worker held any layers — see the log above')
+            Logger.infoToast(
+                `Sharded across ${plan.ring.length} phones — ${args.host_layers} layers here, ` +
+                    `${args.remote_layers} away`
+            )
         } catch (e) {
             Logger.errorToast(`Shard failed: ${e instanceof Error ? e.message : String(e)}`)
         } finally {
@@ -1355,8 +1440,9 @@ const HelixMeshScreen = () => {
             <View style={styles.agentBox}>
                 <Text style={styles.section}>Sharding — one big model across phones</Text>
                 <Text style={styles.dim}>
-                    Splits a model too big for one phone by layers, using llama.cpp's RPC. Every
-                    phone taking part shares its RAM; the host loads the model and drives it.
+                    Splits a model too big for one phone by layers, using llama.cpp's RPC. The host
+                    holds the first layers itself and hands the rest to the phones that joined it,
+                    so only their share ever crosses the Wi-Fi.
                 </Text>
 
                 {/* The mode selector at the top of the screen already chose this; what remains
@@ -1391,6 +1477,8 @@ const HelixMeshScreen = () => {
                 )}
                 {!shardRpcAddr && (
                     <Text style={styles.dim}>
+                        Needed on a phone that JOINS someone else's mesh — it is how the host can put
+                        layers here. The host does not need it: the layers it keeps never leave it.
                         Can't be switched off without restarting the app — llama.cpp's rpc-server
                         has no stop.
                     </Text>
@@ -1400,8 +1488,10 @@ const HelixMeshScreen = () => {
                     <>
                         <Text style={[styles.node, styles.gap]}>As host</Text>
                         <Text style={styles.dim}>
-                            Load the model you want to shard (Models), make sure the other phones
-                            joined and tapped "Share this phone's RAM", then start.
+                            Pick the model above — it is never loaded whole, so it does not need
+                            loading first. Make sure the other phones joined and tapped "Share this
+                            phone's RAM", then start. If one of them cannot be reached, sharding
+                            stops and says which, rather than quietly running here alone.
                         </Text>
                         <ThemedButton
                             label={shardStarting ? 'Starting…' : 'Shard the loaded model'}

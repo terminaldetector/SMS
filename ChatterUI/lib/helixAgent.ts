@@ -8,6 +8,7 @@
 
 import { FrameCodec, Msg, RandomBytes } from './helixFrame'
 import { sealerKey } from './helixCrypto'
+import { MESH_PLAIN_STOPS } from './helixPrompt'
 
 export interface AgentCard {
     agent_id: string
@@ -51,7 +52,15 @@ export function makeLlamaAgentRunner(
             const queue: string[] = []
             let done = false
             const p = llamaStore
-                .completion({ prompt: full, n_predict: nPredict }, (t) => queue.push(t), () => {})
+                // The prompt arrives as `User:`/`Assistant:` turns ending in `Assistant:` (see
+                // helixPrompt.ts), which invites a model with no stop sequence to answer and then
+                // carry on writing the user's next line too. The host cannot trim what it never
+                // sees streaming, so the stop belongs here, where the tokens are produced.
+                .completion(
+                    { prompt: full, n_predict: nPredict, stop: MESH_PLAIN_STOPS },
+                    (t) => queue.push(t),
+                    () => {}
+                )
                 .then(() => {
                     done = true
                 })

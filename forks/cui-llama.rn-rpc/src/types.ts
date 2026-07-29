@@ -89,9 +89,13 @@ export type NativeContextParams = {
   rpc_servers?: Array<string>
 
   /**
-   * Proportion of the model each device should hold, in device-registration order
-   * (`[local device, rpc_servers[0], rpc_servers[1], ...]`). Mirrors llama.cpp's
-   * `--tensor-split`. Only meaningful alongside `rpc_servers` / other backend devices.
+   * Proportion of the model each **device** should hold, mirroring llama.cpp's `--tensor-split`.
+   *
+   * Indexed by llama.cpp's device list, which is `[rpc devices…, local GPUs…]` — the local CPU is
+   * NOT in it, and neither is anything standing for "this machine". How many trailing layers may
+   * leave the local CPU at all is `n_gpu_layers`; this only divides those layers among the devices.
+   * One rpc-server can contribute several devices (a phone serving both its CPU and its GPU), so
+   * the entries line up with device names — see `addRpcServers()`, which returns them per endpoint.
    */
   tensor_split?: Array<number>
 
@@ -628,6 +632,23 @@ export type NativeBackendDeviceInfo = {
   deviceName: string
   maxMemorySize: number
   metadata?: Record<string, any>
+}
+
+/**
+ * What one `ggml-rpc` endpoint contributed when it was registered — see `addRpcServers()`.
+ *
+ * `devices` is empty when the endpoint could not be reached, which is the only chance to notice:
+ * a model loaded with an unreachable `rpc_servers` entry loads wholly on the local device instead,
+ * successfully and silently. Its length is how many `tensor_split` entries this one address takes.
+ */
+export type RpcServerRegistration = {
+  endpoint: string
+  /** ggml device names ("RPC0", "RPC1", …), in the order they enter the device list. */
+  devices: Array<string>
+  /** Free bytes each of those devices reports, as the remote backend sees it. */
+  freeMemory: Array<number>
+  /** Total bytes each of those devices reports. */
+  totalMemory: Array<number>
 }
 
 export type ParallelRequestStatus = {

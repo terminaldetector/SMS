@@ -6,7 +6,13 @@ HELIX does discovery / memory-weighted placement / attestation and produces the 
 converts a plan (the ``rpc_plan`` control response) into the exact commands each device runs:
 
 * every **worker** runs ``rpc-server -H 0.0.0.0 -p <port>`` (its band is offloaded to it);
-* the **main/driver** runs ``llama-cli -m <model> -ngl 99 --rpc <workers> --tensor-split <ratios>``.
+* the **main/driver** runs ``llama-cli -m <model> -ngl <tail> --rpc <workers> --tensor-split <ratios>``.
+
+The ``-ngl``/``--tensor-split`` values come from :func:`helix.rpc_cluster.llama_rpc_args`, not from
+the plan's own fields: ``-ngl`` is how many *trailing* layers may leave the driver (not the model's
+layer count) and ``--tensor-split`` is indexed by llama.cpp's devices, which the driver's own CPU is
+not one of. This file used to emit ``-ngl 99`` with the plan's ring-wide ratios, which asks the
+workers for the whole model and shifts every worker's share by one slot.
 
     # print commands for a running HELIX node (its coordinator must be a ControlNode):
     python -m helix.host.rpc_launch --host 127.0.0.1 --port 8765 \
@@ -23,9 +29,12 @@ import asyncio
 import json
 from typing import Any, Dict, List
 
+from helix.rpc_cluster import llama_rpc_args
+
 
 def _fmt_split(split: List[float]) -> str:
-    # llama.cpp --tensor-split: comma-separated proportions across [main-local, worker0, worker1, ...]
+    # llama.cpp --tensor-split: comma-separated proportions across its DEVICE list, which for a
+    # sharded run is the workers' rpc devices — the driver's CPU is not among them.
     return ",".join("{:.4f}".format(x) for x in split)
 
 
@@ -51,22 +60,28 @@ def build_commands(
         worker_cmds.append({"node": e["node"], "addr": e["addr"],
                             "cmd": ["rpc-server", "-H", "0.0.0.0", "-p", port]})
 
+    args = llama_rpc_args(plan)
+
     binary = "llama-server" if server else "llama-cli"
-    cmd = [binary, "-m", model_path, "-ngl", "99"]
-    if plan.get("rpc_arg"):
-        cmd += ["--rpc", plan["rpc_arg"]]
-    if plan.get("tensor_split"):
-        cmd += ["--tensor-split", _fmt_split(plan["tensor_split"])]
+    cmd = [binary, "-m", model_path, "-ngl", str(args.n_gpu_layers)]
+    if args.rpc_servers:
+        cmd += ["--rpc", ",".join(args.rpc_servers)]
+    if args.tensor_split:
+        cmd += ["--tensor-split", _fmt_split(args.tensor_split)]
     if not server:
         cmd += ["-n", str(n_predict)]
         if prompt:
             cmd += ["-p", prompt]
 
-    return {"main": {"node": main["node"], "addr": main["addr"], "cmd": cmd}, "workers": worker_cmds}
+    return {"main": {"node": main["node"], "addr": main["addr"], "cmd": cmd,
+                     "keeps_layers": args.host_layers, "offloads_layers": args.remote_layers},
+            "workers": worker_cmds}
 
 
 def render(commands: Dict[str, Any]) -> str:
     lines = ["# HELIX -> llama.cpp RPC sharding. Run each on its device (build with -DGGML_RPC=ON)."]
+    lines.append("# the driver keeps {} layers on its own CPU and offloads {} to the workers".format(
+        commands["main"].get("keeps_layers"), commands["main"].get("offloads_layers")))
     for w in commands["workers"]:
         lines.append("# worker {} ({})".format(w["node"], w["addr"]))
         lines.append(" ".join(w["cmd"]))
@@ -102,13 +117,16 @@ def _selftest() -> None:
     # two workers, each an rpc-server on its own port
     assert [w["node"] for w in cmds["workers"]] == ["B", "C"], cmds
     assert cmds["workers"][0]["cmd"] == ["rpc-server", "-H", "0.0.0.0", "-p", "50052"], cmds["workers"][0]
-    # main: llama-cli with --rpc (workers) + --tensor-split spanning the ring
+    # main: llama-cli with --rpc (workers) + --tensor-split over those workers alone. A (8G) keeps
+    # its own 3 layers; B and C hold 2 and 1 of the 3-layer tail, so -ngl is 6 + 1 - 3.
     main = cmds["main"]["cmd"]
     assert main[0] == "llama-cli" and "/sd/big.gguf" in main, main
+    assert main[main.index("-ngl") + 1] == "4", main
     assert main[main.index("--rpc") + 1] == "10.0.0.2:50052,10.0.0.3:50052", main
-    assert main[main.index("--tensor-split") + 1] == "0.5000,0.3333,0.1667", main
+    assert main[main.index("--tensor-split") + 1] == "0.6667,0.3333", main
     assert main[main.index("-p") + 1] == "hello", main
-    print("  build: 2 rpc-server workers + llama-cli --rpc/--tensor-split from the HELIX plan")
+    assert cmds["main"]["keeps_layers"] == 3 and cmds["main"]["offloads_layers"] == 3, cmds["main"]
+    print("  build: 2 rpc-server workers + llama-cli -ngl/--rpc/--tensor-split from the HELIX plan")
 
     # server variant omits prompt, uses llama-server
     srv = build_commands(plan, "/sd/big.gguf", server=True)["main"]["cmd"]

@@ -10,6 +10,7 @@ import type {
   NativeRerankResult,
   JinjaFormattedChatResult,
   ParallelStatus,
+  RpcServerRegistration,
 } from './types'
 
 declare global {
@@ -30,6 +31,9 @@ declare global {
       devices?: string[]
     },
   ) => Promise<boolean>
+  var llamaAddRpcServers: (
+    endpoints: string[],
+  ) => Promise<RpcServerRegistration[]>
   var llamaLoadSession: (
     contextId: number,
     path: string,
