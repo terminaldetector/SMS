@@ -38,6 +38,7 @@ import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { hybridBlocker, HYBRID_TARGET } from '@lib/helixEngines'
 import { clearNetLog, formatNetLog, netLog, onNetLogChange, shouldReport } from '@lib/helixNetLog'
+import { formatReach, reachAll } from '@lib/helixReach'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
     formatShardLoaded,
@@ -951,6 +952,23 @@ const HelixMeshScreen = () => {
                     .map((e) => `${e.role === 'main' ? 'this phone' : e.node}: layers ${e.band[0]}–${e.band[1]}`)
                     .join('\n')
             )
+
+            // Ask the same question llama.cpp is about to ask, before it spends 90 seconds asking
+            // it. It registers an rpc-server by connecting to it, and when that fails it logs to
+            // logcat — invisible here — and quietly loads every layer locally. A refused connect
+            // takes milliseconds and is conclusive.
+            const workerAddrs = plan.endpoints.filter((e) => e.role === 'worker').map((e) => e.addr)
+            const reach = await reachAll(workerAddrs)
+            Logger.info('\n' + formatReach(reach))
+            const unreachable = reach.filter((r) => !r.ok)
+            if (unreachable.length) {
+                Logger.errorToast(
+                    `Cannot reach ${unreachable.map((r) => r.addr).join(', ')} — the layers would ` +
+                        'all stay on this phone. Check the other phone is still on this Wi-Fi and ' +
+                        'has tapped "Share this phone\'s RAM".'
+                )
+                return
+            }
             // Only if something is actually resident: load() refuses a model that is already
             // loaded, and a single-device context has to give up its memory before the split one
             // asks for its share. Nothing to do when sharding straight from a chosen model, which

@@ -22,6 +22,12 @@ export interface MeshRunOptions {
     messages?: ChatMessage[]
 }
 
+// One completion at a time. llama.cpp has a single context per model and throws "Context is busy"
+// when a second request arrives mid-generation — which happened on device when the ordinary chat
+// and a mesh chat were both live. The error is accurate and unhelpful; refusing here says which
+// two things collided.
+let inFlight = false
+
 export async function runMeshTurn(
     mode: MeshMode,
     prompt: string,
@@ -43,31 +49,38 @@ export async function runMeshTurn(
 
     const store = Llama.useLlamaModelStore.getState()
     if (!store.context) throw new Error('no model is loaded on this phone')
+    if (inFlight)
+        throw new Error('this phone is already answering something — wait for it to finish')
+    inFlight = true
     let out = ''
-    await store.completion(
-        {
-            // Messages win when we have them; `prompt` stays as the fallback for a build whose
-            // model has no chat template in its metadata, where llama.cpp cannot format anything.
-            ...(messages?.length ? { messages } : { prompt }),
-            n_predict: nPredict,
-            // llama.cpp's own switch, and better than asking in the prompt: it drives the
-            // template's thinking section rather than hoping the model reads an instruction.
-            enable_thinking: helixReasoning(),
-            // The rule the preamble only asks for. Without it the model carries on writing the
-            // user's next turn and its own answer to it, which is what a bare transcript invites.
-            stop: MESH_STOP_SEQUENCES,
-            // Only when there is a projector — the store warns and drops them otherwise, and a
-            // silently ignored image looks exactly like a model that cannot see.
-            ...(images.length && store.mmproj
-                ? { media_paths: images.map((i) => i.replace('file://', '')) }
-                : {}),
-        },
-        (t: string) => {
-            out += t
-            onToken?.(t)
-        },
-        () => {}
-    )
+    try {
+        await store.completion(
+            {
+                // Messages win when we have them; `prompt` stays as the fallback for a build whose
+                // model has no chat template in its metadata, where llama.cpp cannot format anything.
+                ...(messages?.length ? { messages } : { prompt }),
+                n_predict: nPredict,
+                // llama.cpp's own switch, and better than asking in the prompt: it drives the
+                // template's thinking section rather than hoping the model reads an instruction.
+                enable_thinking: helixReasoning(),
+                // The rule the preamble only asks for. Without it the model carries on writing the
+                // user's next turn and its own answer to it, which is what a bare transcript invites.
+                stop: MESH_STOP_SEQUENCES,
+                // Only when there is a projector — the store warns and drops them otherwise, and a
+                // silently ignored image looks exactly like a model that cannot see.
+                ...(images.length && store.mmproj
+                    ? { media_paths: images.map((i) => i.replace('file://', '')) }
+                    : {}),
+            },
+            (t: string) => {
+                out += t
+                onToken?.(t)
+            },
+            () => {}
+        )
+    } finally {
+        inFlight = false
+    }
     // Streamed tokens can already carry the start of a leaked turn before the stop sequence fires,
     // so the final text is cleaned too — the transcript keeps this, not the stream.
     return clean(out)
