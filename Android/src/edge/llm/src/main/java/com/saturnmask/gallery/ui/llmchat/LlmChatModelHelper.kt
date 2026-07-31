@@ -31,6 +31,7 @@ import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.ModelCapability
 import com.saturnmask.gallery.data.modelCapabilityOverrideStoreFrom
 import com.saturnmask.gallery.data.THOUGHT_CHANNEL
+import com.saturnmask.edge.distilled.engine.BackendSelector
 import com.saturnmask.gallery.runtime.CleanUpListener
 import com.saturnmask.gallery.runtime.LlmModelHelper
 import com.saturnmask.gallery.runtime.ResultListener
@@ -90,30 +91,23 @@ object LlmChatModelHelper : LlmModelHelper {
         key = ConfigKeys.VISION_ACCELERATOR,
         defaultValue = DEFAULT_VISION_ACCELERATOR.label,
       )
+    val nativeLibDir = context.applicationInfo.nativeLibraryDir
     val visionBackend =
-      when (visionAccelerator) {
-        Accelerator.CPU.label -> Backend.CPU(numOfThreads = numThreads)
-        Accelerator.GPU.label -> Backend.GPU()
-        Accelerator.NPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        Accelerator.TPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        else -> Backend.GPU()
-      }
+      BackendSelector.forLabel(
+        label = visionAccelerator,
+        numOfThreads = numThreads,
+        nativeLibraryDir = nativeLibDir,
+      )
     // Mutable: corrected below if the model file turns out not to actually have the encoder
     // (declared support in the allowlist/import metadata is a claim, not a guarantee).
     var shouldEnableImage = supportImage
     var shouldEnableAudio = supportAudio
     val preferredBackend =
-      when (accelerator) {
-        Accelerator.CPU.label -> Backend.CPU(numOfThreads = numThreads)
-        Accelerator.GPU.label -> Backend.GPU()
-        Accelerator.NPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        Accelerator.TPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        else -> Backend.CPU(numOfThreads = numThreads)
-      }
+      BackendSelector.forLabel(
+        label = accelerator,
+        numOfThreads = numThreads,
+        nativeLibraryDir = nativeLibDir,
+      )
     Log.d(TAG, "Preferred backend: $preferredBackend")
 
     val modelPath = model.getPath(context = context)

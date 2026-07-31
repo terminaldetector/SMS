@@ -35,8 +35,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val TAG = "AGRagEngine"
-private const val CHUNK_SIZE = 512
-private const val CHUNK_OVERLAP = 50
 private const val INDEX_FILE_NAME = "rag_index.json"
 
 // Caps how many onProgress calls a single addDocument() emits, regardless of chunk count, so a
@@ -136,7 +134,7 @@ constructor(
         val text = textExtractorRegistry.extractText(context, uri, displayName)
         if (text.isBlank()) error("$displayName has no extractable text")
 
-        val chunkTexts = chunk(text)
+        val chunkTexts = TextChunker.chunk(text)
         val total = chunkTexts.size
         // Report 0/total up front so the UI can switch from "starting…" to a real bar
         // immediately, even before the (potentially slow, e.g. neural-model-init) first chunk
@@ -247,21 +245,6 @@ constructor(
     val collapsed = text.replace(Regex("\\s+"), " ").trim()
     return if (collapsed.length <= PREVIEW_LENGTH) collapsed
     else collapsed.take(PREVIEW_LENGTH).trimEnd() + "…"
-  }
-
-  /** Splits [text] into overlapping fixed-size chunks (char-based, so Cyrillic is unaffected). */
-  private fun chunk(text: String): List<String> {
-    if (text.isEmpty()) return emptyList()
-    val step = (CHUNK_SIZE - CHUNK_OVERLAP).coerceAtLeast(1)
-    val chunks = mutableListOf<String>()
-    var start = 0
-    while (start < text.length) {
-      val end = (start + CHUNK_SIZE).coerceAtMost(text.length)
-      chunks.add(text.substring(start, end))
-      if (end == text.length) break
-      start += step
-    }
-    return chunks
   }
 
   private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {

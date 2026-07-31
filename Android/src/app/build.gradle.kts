@@ -80,6 +80,9 @@ dependencies {
   implementation(project(":edge:mcp"))
   implementation(project(":edge:tools-mobile"))
   implementation(project(":edge:tools-coder"))
+  implementation(project(":edge:tools"))
+  implementation(project(":edge:settings"))
+  implementation(project(":edge:distilled"))
 
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
