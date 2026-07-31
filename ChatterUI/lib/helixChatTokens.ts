@@ -30,20 +30,24 @@ const renderTurn = (t: MeshTurn) => (t.role === 'user' ? `User: ${t.text}` : `As
 export async function buildBranchPromptExact(
     turns: MeshTurn[],
     budgetTokens: number,
-    reserveForAnswer = 512
+    reserveForAnswer = 512,
+    opts: { reasoning?: boolean } = {}
 ): Promise<ExactBuiltPrompt> {
     const store = Llama.useLlamaModelStore.getState()
     const budget = Math.max(256, budgetTokens - reserveForAnswer)
+    const lead = buildBranchPrompt([], budgetTokens, reserveForAnswer, opts)
+        .prompt.replace(/\nAssistant:$/, '')
+        .trim()
     const rendered = turns.map(renderTurn)
 
     // The character estimate's own cut is the starting guess, not a second opinion to reconcile —
     // it is right whenever the text is ASCII-heavy, so most sends cost exactly one real tokenize
     // call to confirm. It is wrong in only one direction (keeps too much), so widening the drop is
     // the only correction this loop ever needs to make.
-    let start = buildBranchPrompt(turns, budgetTokens, reserveForAnswer).dropped
+    let start = buildBranchPrompt(turns, budgetTokens, reserveForAnswer, opts).dropped
 
     while (start < rendered.length) {
-        const candidate = rendered.slice(start).join('\n') + '\nAssistant:'
+        const candidate = `${lead}\n\n${rendered.slice(start).join('\n')}\nAssistant:`
         const tokens = await store.tokenLength(candidate)
         if (tokens <= budget) return { prompt: candidate, dropped: start, tokens }
         start++
@@ -53,6 +57,10 @@ export async function buildBranchPromptExact(
     // context handling deal with it is still more honest than silently truncating the tail — a
     // half-sent turn reads as the model ignoring part of what it was asked, which it never saw.
     const last = rendered.length ? rendered[rendered.length - 1] : ''
-    const prompt = `${last}\nAssistant:`.trim()
-    return { prompt, dropped: Math.max(0, rendered.length - 1), tokens: await store.tokenLength(prompt) }
+    const prompt = `${lead}\n\n${last}\nAssistant:`.trim()
+    return {
+        prompt,
+        dropped: Math.max(0, rendered.length - 1),
+        tokens: await store.tokenLength(prompt),
+    }
 }

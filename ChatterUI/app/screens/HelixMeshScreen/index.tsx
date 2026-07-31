@@ -36,6 +36,7 @@ import { HelixAgentNode, makeExpoRandomBytes, makeLlamaAgentRunner } from '@lib/
 import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
+import { hybridBlocker, HYBRID_TARGET } from '@lib/helixEngines'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
     formatShardLoaded,
@@ -1077,9 +1078,19 @@ const HelixMeshScreen = () => {
             )}
 
             {meshMode === 'hybrid' && (
-                <Text style={[styles.dim, styles.gap]}>
-                    Pick Pointer or Sharder above to use this phone with others.
-                </Text>
+                <View style={styles.agentBox}>
+                    <Text style={styles.section}>What Hybrid will be</Text>
+                    <Text style={styles.dim}>
+                        {`Core — ${HYBRID_TARGET.core.devices} devices on ${HYBRID_TARGET.core.engine}. ${HYBRID_TARGET.core.work}`}
+                    </Text>
+                    <Text style={[styles.dim, styles.gap]}>
+                        {`Shell — ${HYBRID_TARGET.shell.devices} devices on ${HYBRID_TARGET.shell.engine}. ${HYBRID_TARGET.shell.work}`}
+                    </Text>
+                    <Text style={[styles.dim, styles.gap]}>{hybridBlocker()}</Text>
+                    <Text style={[styles.dim, styles.gap]}>
+                        Pick Pointer or Sharder above to use this phone with others today.
+                    </Text>
+                </View>
             )}
 
             {meshMode !== 'hybrid' && (

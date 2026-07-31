@@ -8,8 +8,8 @@
 // stays native-free (built-in WebSocket). Crypto is pure JS @noble; the frame nonce is injected from
 // expo-crypto (New-Architecture-safe) exactly like helixAgent.ts.
 
-import { FrameCodec, Msg, RandomBytes } from './helixFrame'
 import { sealerKey } from './helixCrypto'
+import { FrameCodec, Msg, RandomBytes } from './helixFrame'
 import { handleModelRequest, ServedModel } from './helixModelServe'
 import { HttpRequest, HttpResponder, StreamSock, WsServerConnection } from './helixWsServer'
 
@@ -27,7 +27,6 @@ interface TcpModule {
 
 // Lazily require react-native-tcp-socket so its native code is touched only when hosting starts.
 function loadTcp(): TcpModule {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require('react-native-tcp-socket')
     return (mod.default ?? mod) as TcpModule
 }
@@ -51,6 +50,16 @@ export interface AgentInfo {
 // TCP connection can sit half-open — no 'close' event ever arrives — so silence is what actually
 // tells us it's gone. Generous enough to survive a brief stall, short enough to stay honest.
 const AGENT_TIMEOUT_MS = 15000
+// How often the host is expected to poll agents(). Anything longer than this between two ticks is
+// time this phone spent unable to read anything, not time an agent spent silent.
+const LIVENESS_TICK_MS = 1000
+
+/** Highest-scoring candidate; ties keep the earliest, so the result is stable rather than random. */
+function bestVote(votes: [string, number][]): string {
+    let best = votes[0]
+    for (const v of votes) if (v[1] > best[1]) best = v
+    return best[0]
+}
 
 export class HelixCoordinator {
     private codec: FrameCodec
@@ -60,6 +69,10 @@ export class HelixCoordinator {
     // The GGUF this host hands to a joining phone that doesn't have it yet. Null = offer nothing,
     // which is what the "don't send my model" setting leaves it as.
     private served: ServedModel | null = null
+    // Round-robin cursor for `single` — which agent answered last.
+    private rr = -1
+    // When agents() last ran, so a blocked JS thread can be told apart from a quiet agent.
+    private lastTick = 0
 
     constructor(
         private readonly nodeId: string,
@@ -129,7 +142,11 @@ export class HelixCoordinator {
                 if (c) c.results[msg.src] = String(msg.body.text ?? '')
             } else if (msg.type === Msg.VOTE) {
                 const c = this.coll.get(msg.tid)
-                if (c) c.votes[msg.src] = [String(msg.body.candidate ?? ''), Number(msg.body.score ?? 0)]
+                if (c)
+                    c.votes[msg.src] = [
+                        String(msg.body.candidate ?? ''),
+                        Number(msg.body.score ?? 0),
+                    ]
             }
         })
         conn.onClose(() => {
@@ -138,10 +155,24 @@ export class HelixCoordinator {
     }
 
     agents(): string[] {
-        const cutoff = Date.now() - AGENT_TIMEOUT_MS
+        // Silence only means "gone" if we were listening. Loading a sharded model blocks this
+        // phone's JS thread for as long as llama.cpp takes — 13s was seen on a 4B, and a bigger
+        // model is worse — during which no announce can be read no matter how healthily the other
+        // phones are sending them. Pruning on wall-clock alone therefore dropped and CLOSED every
+        // worker at exactly the moment a shard was being set up, and the mesh appeared to lose
+        // devices for reasons no log explained.
+        //
+        // So the deaf interval is subtracted. This tick's own gap is however long we were away;
+        // anything beyond the normal polling cadence was not the agent's silence, it was ours.
+        const now = Date.now()
+        const gap = this.lastTick ? now - this.lastTick : 0
+        this.lastTick = now
+        const deafFor = Math.max(0, gap - LIVENESS_TICK_MS)
+        const cutoff = now - AGENT_TIMEOUT_MS - deafFor
+
         for (const [id, a] of this.conns) {
             if (a.lastSeen >= cutoff) continue
-            this.conns.delete(id) // gone quiet — drop it so the UI and routing stay truthful
+            this.conns.delete(id) // genuinely gone quiet — drop it so the UI and routing stay truthful
             try {
                 a.conn.close()
             } catch {
@@ -160,24 +191,65 @@ export class HelixCoordinator {
         })
     }
 
-    async infer(prompt: string, mode: 'single' | 'voting' = 'single', timeoutMs = 60000): Promise<string> {
-        const agent = this.agents()[0]
-        if (!agent) throw new Error('no agent joined yet')
+    async infer(
+        prompt: string,
+        mode: 'single' | 'voting' = 'single',
+        timeoutMs = 60000
+    ): Promise<string> {
+        const live = this.agents()
+        if (!live.length) throw new Error('no agent joined yet')
+
+        // Which phones get the task is the whole difference between the two modes, and it used to
+        // be neither: every task went to agents()[0] regardless. Three phones joined and two of
+        // them sat idle, while "voting" waited for votes from agents that had never been asked —
+        // returning the one answer it did get, dressed up as a decision.
+        //
+        // voting — every agent, so there is something to decide between.
+        // single — one agent, but not always the SAME one. Round-robin is what makes several
+        //   agents worth joining in Pointer at all: consecutive prompts land on different phones
+        //   instead of queueing behind whichever happened to connect first.
+        let targets: string[]
+        if (mode === 'voting') {
+            targets = live
+        } else {
+            this.rr = (this.rr + 1) % live.length
+            targets = [live[this.rr]]
+        }
+
         const tid = 't' + Math.random().toString(36).slice(2, 10)
         this.coll.set(tid, { results: {}, votes: {} })
-        this.conns.get(agent)!.conn.send(this.codec.seal(Msg.TASK, { mode, prompt }, tid))
+        const sealed = this.codec.seal(Msg.TASK, { mode, prompt }, tid)
+        for (const id of targets) {
+            // One agent going away between agents() and here must not cost the others their task.
+            try {
+                this.conns.get(id)?.conn.send(sealed)
+            } catch {
+                /* it will simply not be among the answers */
+            }
+        }
+
         const deadline = Date.now() + timeoutMs
+        // Voting waits for everyone asked, but not past the deadline — one slow phone should cost
+        // the answer some latency, never the whole thing. Whatever arrived by then is what gets
+        // decided between.
+        const wantVotes = targets.length
         try {
             while (Date.now() < deadline) {
                 const c = this.coll.get(tid)!
                 if (mode === 'voting') {
                     const v = Object.values(c.votes)
-                    if (v.length) return v[0][0] // single-agent: its candidate is the decision
+                    if (v.length >= wantVotes) return bestVote(v)
                 } else if (Object.keys(c.results).length) {
                     return Object.values(c.results)[0]
                 }
                 await new Promise((r) => setTimeout(r, 20))
             }
+            // Deadline reached. A partial vote is still a decision between real candidates, and
+            // far better than discarding answers that did arrive because one phone never replied.
+            const partial = Object.values(this.coll.get(tid)?.votes ?? {})
+            if (mode === 'voting' && partial.length) return bestVote(partial)
+            const anyResult = Object.values(this.coll.get(tid)?.results ?? {})
+            if (anyResult.length) return anyResult[0]
             // Worth spelling out, because the commonest way to see this is not a fault at all: a
             // phone that joined only to lend its RAM for sharding is a shard worker, not a model
             // that answers prompts. A sharded model is used from an ordinary chat on the host,

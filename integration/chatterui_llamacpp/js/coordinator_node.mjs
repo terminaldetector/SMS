@@ -13,6 +13,15 @@ const td = new TextDecoder()
 // half-open — no 'close' event ever arrives — so silence is what actually tells us it's gone.
 // Mirrors AGENT_TIMEOUT_MS in ChatterUI/lib/helixCoordinator.ts.
 const AGENT_TIMEOUT_MS = 15000
+// How often the host is expected to poll agents(); a longer gap is time it could not listen at all.
+const LIVENESS_TICK_MS = 1000
+
+/** Highest-scoring candidate; ties keep the earliest, so a decision is stable, not random. */
+function bestVote(votes) {
+  let best = votes[0]
+  for (const v of votes) if (v[1] > best[1]) best = v
+  return best[0]
+}
 
 export class Coordinator {
   constructor(nodeId, clusterSecret, { agentTimeoutMs = AGENT_TIMEOUT_MS } = {}) {
@@ -22,6 +31,8 @@ export class Coordinator {
     this.conns = new Map()  // agentId -> { conn, lastSeen }
     this._coll = new Map()  // tid -> { results:{}, votes:{} }
     this._agentTimeoutMs = agentTimeoutMs
+    this._rr = -1        // round-robin cursor for `single`
+    this._lastTick = 0   // when agents() last ran, to tell a blocked thread from a quiet agent
   }
 
   listen(port = 8790, host = '0.0.0.0') {
@@ -61,7 +72,14 @@ export class Coordinator {
   }
 
   agents() {
-    const cutoff = Date.now() - this._agentTimeoutMs
+    // Silence only means "gone" if we were listening. On a phone, loading a sharded model blocks
+    // the JS thread for many seconds and no announce can be read however healthily it is sent —
+    // pruning on wall-clock alone dropped every worker at exactly the moment a shard was set up.
+    // Whatever this tick spent beyond the normal cadence was our deafness, not their silence.
+    const now = Date.now()
+    const gap = this._lastTick ? now - this._lastTick : 0
+    this._lastTick = now
+    const cutoff = now - this._agentTimeoutMs - Math.max(0, gap - LIVENESS_TICK_MS)
     for (const [id, a] of this.conns) {
       if (a.lastSeen >= cutoff) continue
       this.conns.delete(id)  // gone quiet — drop it so routing stays truthful
@@ -79,23 +97,45 @@ export class Coordinator {
   }
 
   async infer(prompt, mode = 'single', { timeoutMs = 8000 } = {}) {
-    const agent = this.agents()[0]
-    if (!agent) throw new Error('no agent joined yet')
+    const live = this.agents()
+    if (!live.length) throw new Error('no agent joined yet')
+
+    // Which phones get the task is the whole difference between the modes, and it used to be
+    // neither: everything went to agents()[0]. Extra phones sat idle, and "voting" waited on votes
+    // from agents that had never been asked.
+    let targets
+    if (mode === 'voting') {
+      targets = live                          // everyone, so there is something to decide between
+    } else {
+      this._rr = (this._rr + 1) % live.length // round-robin, so several agents share the load
+      targets = [live[this._rr]]
+    }
+
     const tid = 't' + Math.random().toString(36).slice(2, 10)
     this._coll.set(tid, { results: {}, votes: {} })
-    this.conns.get(agent).conn.send(this.codec.seal(Msg.TASK, { mode, prompt }, tid))
+    const sealed = this.codec.seal(Msg.TASK, { mode, prompt }, tid)
+    for (const id of targets) {
+      try { this.conns.get(id)?.conn.send(sealed) } catch {}
+    }
+
     const deadline = Date.now() + timeoutMs
     try {
       while (Date.now() < deadline) {
         const c = this._coll.get(tid)
         if (mode === 'voting') {
           const v = Object.values(c.votes)
-          if (v.length) return v[0][0] // single-agent: its candidate is the decision
+          if (v.length >= targets.length) return bestVote(v)
         } else if (Object.keys(c.results).length) {
           return Object.values(c.results)[0]
         }
         await new Promise((r) => setTimeout(r, 10))
       }
+      // A partial vote still decides between real candidates — better than throwing away answers
+      // that did arrive because one phone never replied.
+      const partial = Object.values(this._coll.get(tid)?.votes ?? {})
+      if (mode === 'voting' && partial.length) return bestVote(partial)
+      const any = Object.values(this._coll.get(tid)?.results ?? {})
+      if (any.length) return any[0]
       throw new Error('infer timeout (agent did not answer)')
     } finally {
       this._coll.delete(tid)

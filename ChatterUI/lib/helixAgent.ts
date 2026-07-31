@@ -7,6 +7,7 @@
 // One binary WS message = one HELIX frame (WebSocket is message-framed, no length prefix).
 
 import { FrameCodec, Msg, RandomBytes } from './helixFrame'
+import { MESH_STOP_SEQUENCES } from './helixPrompt'
 import { sealerKey } from './helixCrypto'
 
 export interface AgentCard {
@@ -51,7 +52,16 @@ export function makeLlamaAgentRunner(
             const queue: string[] = []
             let done = false
             const p = llamaStore
-                .completion({ prompt: full, n_predict: nPredict }, (t) => queue.push(t), () => {})
+                .completion(
+                    // The coordinator sends a transcript ending in "Assistant:", and without a
+                    // stop rule this model happily writes the user's next turn too — the answer
+                    // then arrives back at the host containing both sides of a conversation that
+                    // never happened. The host trims it as well, but stopping beats trimming: what
+                    // is never generated costs no tokens and no seconds.
+                    { prompt: full, n_predict: nPredict, stop: MESH_STOP_SEQUENCES },
+                    (t) => queue.push(t),
+                    () => {}
+                )
                 .then(() => {
                     done = true
                 })

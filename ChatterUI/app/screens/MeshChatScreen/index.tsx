@@ -41,7 +41,7 @@ import { meshRunBlocker, runMeshTurn } from '@lib/helixChatRun'
 import { buildBranchPromptExact } from '@lib/helixChatTokens'
 import { MultimodalStatus, probeMultimodal } from '@lib/helixMultimodal'
 import { MeshMode } from '@lib/helixSession'
-import { helixMeshContext } from '@lib/helixSettings'
+import { helixMeshContext, helixReasoning } from '@lib/helixSettings'
 import { Logger } from '@lib/state/Logger'
 import { Theme } from '@lib/theme/ThemeManager'
 
@@ -155,10 +155,11 @@ const MeshChatScreen = () => {
         // chats, where 4 chars/token undercounts by a wide margin and the trim keeps too much.
         const userTurn: MeshTurn = { role: 'user', text, images: sentImages, at: Date.now() }
         const allTurns = [...branch.turns, userTurn]
+        const reasoning = helixReasoning()
         const built =
             mode === 'sharder'
-                ? await buildBranchPromptExact(allTurns, contextBudget)
-                : buildBranchPrompt(allTurns, contextBudget)
+                ? await buildBranchPromptExact(allTurns, contextBudget, 512, { reasoning })
+                : buildBranchPrompt(allTurns, contextBudget, 512, { reasoning })
 
         addTurn(mode, userTurn)
         addTurn(mode, { role: 'assistant', text: '', at: Date.now() })
@@ -339,7 +340,9 @@ const MeshChatScreen = () => {
                     </View>
 
                     <Text style={styles.budget}>
-                        {`${branch.turns.length} turns · budget ${contextBudget} tokens${
+                        {`${branch.turns.length} turns · budget ${contextBudget} tokens · reasoning ${
+                            helixReasoning() ? 'on' : 'off'
+                        }${
                             mode === 'pointer'
                                 ? ' (set in Settings — the agent’s window is not announced)'
                                 : ''

@@ -8,7 +8,21 @@
 //
 //   node integration/chatterui_llamacpp/js/context_smoke.mjs
 
-import { buildBranchPrompt, estimateTokens } from '../../../ChatterUI/lib/helixPrompt.ts'
+import {
+  buildBranchPrompt,
+  estimateTokens,
+  MESH_PREAMBLE,
+  MESH_STOP_SEQUENCES,
+  trimAtStopSequence,
+} from '../../../ChatterUI/lib/helixPrompt.ts'
+
+// Turn lines only — the preamble is prose, not a turn, and counting it as one would make every
+// drop-count assertion below off by however many lines it happens to occupy.
+const turnLines = (prompt) =>
+  prompt
+    .slice(MESH_PREAMBLE.length)
+    .split('\n')
+    .filter((l) => l.startsWith('User:') || l.startsWith('Assistant: ')).length
 
 let pass = 0
 const check = (c, w) => { if (!c) throw new Error('FAIL: ' + w); pass++; console.log('  ok  ' + w) }
@@ -46,7 +60,7 @@ const turn = (role, text) => ({ role, text, at: 0 })
   check(built.prompt.includes('line 39'), 'the most recent turn is always kept')
   check(!built.prompt.includes('line 0 '), 'the oldest turn is the one dropped')
   check(
-    built.dropped === turns.length - (built.prompt.split('\n').length - 1),
+    built.dropped === turns.length - turnLines(built.prompt),
     'the reported drop count matches the lines actually kept'
   )
 }
@@ -73,13 +87,59 @@ const turn = (role, text) => ({ role, text, at: 0 })
 {
   const built = buildBranchPrompt([], 4096)
   check(built.dropped === 0, 'an empty branch drops nothing')
-  check(built.prompt.trim() === 'Assistant:', 'an empty branch is just the model being handed the turn')
+  check(
+    built.prompt.trim() === `${MESH_PREAMBLE}\n\n\nAssistant:`.trim(),
+    'an empty branch is the lead-in plus the model being handed the turn'
+  )
 }
 
 // --- a tiny budget is floored rather than producing nothing ---
 {
   const built = buildBranchPrompt([turn('user', 'hello there')], 16)
   check(built.prompt.includes('hello there'), 'an absurdly small budget still sends the newest turn')
+}
+
+// --- the lead-in, which is what stops an answer running on into the next turn ---
+{
+  const built = buildBranchPrompt([turn('user', 'hi')], 8192)
+  check(built.prompt.startsWith(MESH_PREAMBLE), 'every prompt opens with the lead-in')
+  check(
+    /replies\s+once/.test(MESH_PREAMBLE) && /never writes the user/.test(MESH_PREAMBLE),
+    'the lead-in actually says to answer once and not continue the conversation'
+  )
+  // Budgeting has to include it, or the prompt goes over by exactly the preamble every time.
+  const turns = []
+  for (let i = 0; i < 200; i++) turns.push(turn('user', `line ${i} ` + 'q'.repeat(100)))
+  const budget = 2048
+  const big = buildBranchPrompt(turns, budget)
+  check(
+    big.estimatedTokens <= budget - 512,
+    'the lead-in is counted against the budget, not added on top of it'
+  )
+}
+
+// --- trimming, for answers that ran on anyway ---
+{
+  check(
+    trimAtStopSequence('The sky is blue.\nUser: and grass?\nAssistant: green') === 'The sky is blue.',
+    'an answer that writes the next turn is cut at the point it starts'
+  )
+  check(
+    trimAtStopSequence('  A plain answer.  ') === 'A plain answer.',
+    'an answer that behaved is returned whole, just trimmed of space'
+  )
+  check(trimAtStopSequence('') === '', 'an empty answer stays empty rather than throwing')
+  check(
+    MESH_STOP_SEQUENCES.includes('\nUser:'),
+    'the newline form is among the stop sequences — it is the one that actually fires'
+  )
+  // The pathological case from the device: the model repeating the whole exchange back.
+  const runOn =
+    'Зонтик — это растение.\nUser: Цветок зонтик\nAssistant: Зонтик — это растение.\nUser: Цветок зонтик'
+  check(
+    trimAtStopSequence(runOn) === 'Зонтик — это растение.',
+    'the repeated-transcript answer seen on device is cut back to the one real reply'
+  )
 }
 
 console.log(`\nALL PASSED (${pass} checks)`)

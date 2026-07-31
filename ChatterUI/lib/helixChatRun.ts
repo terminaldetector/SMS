@@ -6,7 +6,9 @@
 // Sharder runs this phone's own context, which happens to have most of its layers somewhere else.
 
 import { Llama } from './engine/Local/LlamaLocal'
+import { MESH_STOP_SEQUENCES, stripReasoning, trimAtStopSequence } from './helixPrompt'
 import { meshSession, MeshMode } from './helixSession'
+import { helixReasoning } from './helixSettings'
 
 export interface MeshRunOptions {
     images?: string[]
@@ -26,7 +28,9 @@ export async function runMeshTurn(
         // No stream: an agent returns its answer whole. Rather than fake a stream by chopping the
         // finished text, the caller simply gets one chunk — a progress bar made of an answer that
         // already arrived would be a lie about where the waiting happened.
-        const answer = await coord.infer(prompt, meshSession.answerMode)
+        // Trimmed here rather than trusted: the answer was produced by another phone's runner,
+        // which may not have honoured the stop sequences at all.
+        const answer = clean(await coord.infer(prompt, meshSession.answerMode))
         onToken?.(answer)
         return answer
     }
@@ -38,6 +42,9 @@ export async function runMeshTurn(
         {
             prompt,
             n_predict: nPredict,
+            // The rule the preamble only asks for. Without it the model carries on writing the
+            // user's next turn and its own answer to it, which is what a bare transcript invites.
+            stop: MESH_STOP_SEQUENCES,
             // Only when there is a projector — the store warns and drops them otherwise, and a
             // silently ignored image looks exactly like a model that cannot see.
             ...(images.length && store.mmproj
@@ -50,7 +57,17 @@ export async function runMeshTurn(
         },
         () => {}
     )
-    return out.trim()
+    // Streamed tokens can already carry the start of a leaked turn before the stop sequence fires,
+    // so the final text is cleaned too — the transcript keeps this, not the stream.
+    return clean(out)
+}
+
+// The two things an answer needs before it is worth showing: no continuation of the conversation,
+// and no thinking-out-loud when that was switched off. The /no_think hint is only a request, and a
+// model that ignored it should not leave its reasoning in the transcript regardless.
+function clean(text: string): string {
+    const trimmed = trimAtStopSequence(text)
+    return helixReasoning() ? trimmed : stripReasoning(trimmed)
 }
 
 /** Why this mode cannot answer right now, or undefined when it can. */

@@ -15,6 +15,7 @@ import { useMMKVString } from 'react-native-mmkv'
 
 import ThemedButton from '@components/buttons/ThemedButton'
 import HorizontalSelector from '@components/input/HorizontalSelector'
+import ThemedSwitch from '@components/input/ThemedSwitch'
 import ThemedTextInput from '@components/input/ThemedTextInput'
 import SectionTitle from '@components/text/SectionTitle'
 import {
@@ -43,6 +44,7 @@ const MeshSettings = () => {
     const [rpcPort, setRpcPort] = useMMKVString(HelixKeys.rpcPort)
     const [secret, setSecret] = useMMKVString(HelixKeys.secret)
     const [meshContext, setMeshContext] = useMMKVString(HelixKeys.meshContext)
+    const [reasoning, setReasoning] = useMMKVString(HelixKeys.reasoning)
     const [, setMemoryProfile] = useMMKVString(HelixKeys.memoryProfile)
     const profile = helixMemoryProfile()
 
@@ -120,6 +122,13 @@ const MeshSettings = () => {
                     {`Above ${HELIX_MAX_MESH_CONTEXT} — ${HELIX_DEFAULT_MESH_CONTEXT} will be used instead.`}
                 </Text>
             )}
+
+            <ThemedSwitch
+                label="Let models think out loud"
+                value={reasoning !== 'off'}
+                onChangeValue={(v) => setReasoning(v ? 'on' : 'off')}
+                description="Qwen3-family models reason inside <think> tags before answering. Off asks them not to and removes the block if they do anyway — worth it on a shard, where every one of those tokens crosses the network before the answer starts."
+            />
 
             <View style={{ marginTop: spacing.l }}>
                 <Text style={{ color: color.text._100 }}>Memory this phone lends</Text>

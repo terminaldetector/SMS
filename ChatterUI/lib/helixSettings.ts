@@ -24,6 +24,8 @@ export const HelixKeys = {
     memoryProfile: 'helix-memory-profile',
     /** Context budget for a Pointer conversation, where the remote model's window is unknown. */
     meshContext: 'helix-mesh-context',
+    /** Whether mesh chats let the model think out loud before answering. */
+    reasoning: 'helix-reasoning',
 } as const
 
 export const HELIX_DEFAULT_PORT = 8790
@@ -82,6 +84,12 @@ export function helixMeshContext(): number {
     const n = raw ? Number(raw) : NaN
     if (!Number.isFinite(n) || n < 1024 || n > HELIX_MAX_MESH_CONTEXT) return HELIX_DEFAULT_MESH_CONTEXT
     return Math.floor(n)
+}
+
+// Thinking out loud costs tokens and seconds before a word of the answer appears, and on a sharded
+// model every one of those tokens crosses the network. Worth having, worth being able to turn off.
+export function helixReasoning(): boolean {
+    return mmkv.getString(HelixKeys.reasoning) !== 'off'
 }
 
 export function helixMemoryProfile(): MemoryProfile {

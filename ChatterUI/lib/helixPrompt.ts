@@ -24,6 +24,53 @@ export function estimateTokens(text: string): number {
     return Math.ceil(text.length / CHARS_PER_TOKEN)
 }
 
+// The lead-in. Without one, "User: …\nAssistant:" is not a question put to a model — it is the
+// opening of a transcript, and a base model does the only sensible thing with a transcript: it
+// writes more of it. That is exactly what happened on device, with answers that ran straight on
+// into "User: <the same question>\nAssistant: <the same answer>" for as long as n_predict allowed.
+//
+// Two things stop it, and both are needed. This says what the text is; the stop sequences below
+// enforce it, because instructions are a request and stop sequences are a rule.
+export const MESH_PREAMBLE =
+    'The following is a conversation between a user and a helpful assistant. The assistant replies ' +
+    "once, directly, and then stops — it never writes the user's next message."
+
+// Where an answer ends. `\nUser:` is the real one; the others catch a model that starts a fresh
+// turn without a newline, or announces itself before answering.
+export const MESH_STOP_SEQUENCES = ['\nUser:', '\nAssistant:', 'User:', 'Assistant:']
+
+// Qwen3-family models think out loud in <think>…</think> before answering, and the tag is part of
+// the generated text — it arrives in the stream like any other token. Two levers, because either
+// alone is unreliable: this hint asks the model not to think (Qwen reads it; other families ignore
+// it harmlessly), and stripReasoning removes the block if it thought anyway.
+export const REASONING_OFF_HINT = '/no_think'
+
+const THINK_BLOCK = /<think>[\s\S]*?<\/think>/g
+// An answer cut short by n_predict can leave <think> open forever. Dropping from the tag to the end
+// is right: everything after it was reasoning that never reached a conclusion.
+const THINK_UNCLOSED = /<think>[\s\S]*$/
+
+/** Remove a model's visible reasoning, leaving only what it actually answered. */
+export function stripReasoning(text: string): string {
+    return text.replace(THINK_BLOCK, '').replace(THINK_UNCLOSED, '').trim()
+}
+
+/**
+ * Cut an answer at the first place it starts writing somebody else's turn.
+ *
+ * Belt and braces over the stop sequences, and not redundant: Pointer's answer comes back whole
+ * from another phone, whose runner may or may not have honoured them, and an answer that visibly
+ * continues the conversation by itself is the single most confusing thing a mesh chat can show.
+ */
+export function trimAtStopSequence(text: string): string {
+    let cut = text.length
+    for (const stop of MESH_STOP_SEQUENCES) {
+        const at = text.indexOf(stop)
+        if (at >= 0 && at < cut) cut = at
+    }
+    return text.slice(0, cut).trim()
+}
+
 export interface BuiltPrompt {
     prompt: string
     /** Turns left out of the front because the budget ran out. */
@@ -42,16 +89,22 @@ export interface BuiltPrompt {
 export function buildBranchPrompt(
     turns: MeshTurn[],
     budgetTokens: number,
-    reserveForAnswer = 512
+    reserveForAnswer = 512,
+    opts: { reasoning?: boolean } = {}
 ): BuiltPrompt {
+    // Reasoning defaults to on — it is the model's own behaviour, and silently suppressing it
+    // would hide what a model is actually doing from someone testing a mesh.
+    const lead = opts.reasoning === false ? `${MESH_PREAMBLE} ${REASONING_OFF_HINT}` : MESH_PREAMBLE
     const budget = Math.max(256, budgetTokens - reserveForAnswer)
     const rendered = turns.map((t) =>
         t.role === 'user' ? `User: ${t.text}` : `Assistant: ${t.text}`
     )
 
-    // Walk backwards so the most recent turns are the ones that survive.
+    // Walk backwards so the most recent turns are the ones that survive. The preamble is counted
+    // as part of what has to fit: it is sent every time, and leaving it out of the budget is how a
+    // prompt comes out slightly over the limit no matter how carefully the turns were measured.
     let start = 0
-    let used = estimateTokens('Assistant:')
+    let used = estimateTokens(lead) + estimateTokens('Assistant:')
     for (let i = rendered.length - 1; i >= 0; i--) {
         const cost = estimateTokens(rendered[i]) + 1
         if (used + cost > budget) {
@@ -66,6 +119,6 @@ export function buildBranchPrompt(
     // with it. Saying it was dropped when it was not would be a lie to the screen above.
     if (!kept.length && rendered.length) kept.push(rendered[rendered.length - 1])
 
-    const prompt = kept.join('\n') + '\nAssistant:'
+    const prompt = `${lead}\n\n${kept.join('\n')}\nAssistant:`
     return { prompt, dropped: turns.length - kept.length, estimatedTokens: estimateTokens(prompt) }
 }
