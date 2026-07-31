@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="config_label_max_tokens" translatable="true">Max tokens</string>
+    <string name="config_label_max_output_tokens" translatable="true">Max output tokens</string>
+    <string name="config_label_topk" translatable="true">TopK</string>
+    <string name="config_label_topp" translatable="true">TopP</string>
+    <string name="config_label_temperature" translatable="true">Temperature</string>
+    <string name="config_label_num_threads" translatable="true">CPU threads</string>
+    <string name="config_label_seed" translatable="true">Seed</string>
+    <string name="config_label_default_max_tokens" translatable="true">Default max tokens</string>
+    <string name="config_label_default_topk" translatable="true">Default TopK</string>
+    <string name="config_label_default_topp" translatable="true">Default TopP</string>
+    <string name="config_label_default_temperature" translatable="true">Default temperature</string>
+    <string name="config_label_support_thinking" translatable="true">Support thinking</string>
+    <string name="config_label_enable_thinking" translatable="true">Enable thinking</string>
+    <string name="config_label_enable_speculative_decoding" translatable="true">Enable speculative decoding</string>
+    <string name="config_label_max_result_count" translatable="true">Max result count</string>
+    <string name="config_label_use_gpu" translatable="true">Use GPU</string>
+    <string name="config_label_accelerator" translatable="true">Accelerator</string>
+    <string name="config_label_vision_accelerator" translatable="true">Vision accelerator</string>
+    <string name="config_label_compatible_accelerators" translatable="true">Compatible accelerators</string>
+    <string name="config_label_warm_up_iterations" translatable="true">Warm up iterations</string>
+    <string name="config_label_benchmark_iterations" translatable="true">Benchmark iterations</string>
+    <string name="config_label_iterations" translatable="true">Iterations</string>
+    <string name="theme_title" translatable="true">Theme</string>
+    <string name="name" translatable="true">Name</string>
+    <string name="config_label_model_type" translatable="true">Model type</string>
+    <string name="config_label_model" translatable="true">Model</string>
+    <string name="config_label_prefill_tokens" translatable="true">Prefill tokens</string>
+    <string name="config_label_decode_tokens" translatable="true">Decode tokens</string>
+    <string name="config_label_number_of_runs" translatable="true">Number of runs</string>
+</resources>
