@@ -10,6 +10,7 @@
 
 import { sealerKey } from './helixCrypto'
 import { FrameCodec, Msg, RandomBytes } from './helixFrame'
+import { addNetLog, MAX_NET_LOG_CHARS } from './helixNetLog'
 import { handleModelRequest, ServedModel } from './helixModelServe'
 import { HttpRequest, HttpResponder, StreamSock, WsServerConnection } from './helixWsServer'
 
@@ -136,6 +137,16 @@ export class HelixCoordinator {
                     lastSeen: Date.now(),
                     mem: Number(msg.body.mem ?? 0),
                     rpc: String(msg.body.rpc ?? ''),
+                })
+            } else if (msg.type === Msg.STATUS && typeof msg.body.log === 'string') {
+                // An agent reporting something worth seeing on the host's screen. Bounded here as
+                // well as at the sender: the sender's limit is a courtesy, this one is the rule.
+                const level = msg.body.level === 'error' ? 'error' : 'warn'
+                addNetLog({
+                    from: msg.src,
+                    level,
+                    text: String(msg.body.log).slice(0, MAX_NET_LOG_CHARS),
+                    at: Number(msg.body.at) || Date.now(),
                 })
             } else if (msg.type === Msg.RESULT) {
                 const c = this.coll.get(msg.tid)

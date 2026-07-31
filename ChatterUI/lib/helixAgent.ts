@@ -7,6 +7,7 @@
 // One binary WS message = one HELIX frame (WebSocket is message-framed, no length prefix).
 
 import { FrameCodec, Msg, RandomBytes } from './helixFrame'
+import { MAX_NET_LOG_CHARS } from './helixNetLog'
 import { MESH_STOP_SEQUENCES } from './helixPrompt'
 import { sealerKey } from './helixCrypto'
 
@@ -37,7 +38,12 @@ const enc = new TextEncoder()
 export function makeLlamaAgentRunner(
     llamaStore: {
         completion: (
-            params: { prompt: string; n_predict?: number; stop?: string[] },
+            params: {
+                prompt?: string
+                messages?: { role: string; content: string }[]
+                n_predict?: number
+                stop?: string[]
+            },
             onToken: (t: string) => void,
             onDone: (t: string) => void
         ) => Promise<unknown>
@@ -53,12 +59,19 @@ export function makeLlamaAgentRunner(
             let done = false
             const p = llamaStore
                 .completion(
-                    // The coordinator sends a transcript ending in "Assistant:", and without a
-                    // stop rule this model happily writes the user's next turn too — the answer
-                    // then arrives back at the host containing both sides of a conversation that
-                    // never happened. The host trims it as well, but stopping beats trimming: what
-                    // is never generated costs no tokens and no seconds.
-                    { prompt: full, n_predict: nPredict, stop: MESH_STOP_SEQUENCES },
+                    // As a MESSAGE, not a raw prompt: llama.cpp then applies THIS phone's model's
+                    // own chat template, which is the only formatting it was trained on. The
+                    // coordinator cannot do that for us — it does not know what model answered.
+                    // Handed a bare transcript instead, an instruct model comments on the input's
+                    // structure rather than answering it.
+                    //
+                    // Stop sequences stay: the transcript the host assembled is inside this
+                    // message, so the model can still be tempted to continue it.
+                    {
+                        messages: [{ role: 'user', content: full }],
+                        n_predict: nPredict,
+                        stop: MESH_STOP_SEQUENCES,
+                    },
                     (t) => queue.push(t),
                     () => {}
                 )
@@ -187,6 +200,25 @@ export class HelixAgentNode {
             clearInterval(this.announceTimer)
             this.announceTimer = null
         }
+    }
+
+    /**
+     * Send one diagnostic line to the host, so a two-phone mesh can be read from one screen.
+     *
+     * STATUS rather than a new message type: it already exists in the wire spec, is already
+     * accepted, and carries an arbitrary body — adding a type would mean a spec change and an
+     * older phone dropping frames it does not recognise, for a feature that must never be the
+     * reason a mesh stops working. Best-effort: not sent at all when the link is down.
+     */
+    report(level: string, text: string) {
+        if (!this.connected) return
+        this.send(
+            this.codec.seal(Msg.STATUS, {
+                log: text.slice(0, MAX_NET_LOG_CHARS),
+                level,
+                at: Date.now(),
+            })
+        )
     }
 
     private send(frame: Uint8Array) {

@@ -99,6 +99,39 @@ const nodes = [
   check(problems.some((p) => p.includes('no free memory')), 'a node with no memory reading is caught')
 }
 
+// --- the load report proves offload really happened, or says it did not ---
+{
+  const rpcDev = [
+    { backend: 'CPU', type: 'CPU', deviceName: 'cpu' },
+    { backend: 'RPC', type: 'GPU', deviceName: 'RPC[192.168.1.11:50052]' },
+  ]
+  const connected = formatShardLoaded(good, 36, 4200, true, rpcDev)
+  check(
+    connected.includes('layers really left this phone'),
+    'a registered RPC device is reported as proof the split was taken'
+  )
+  check(
+    connected.includes('Phones in the ring: 2'),
+    'the ring size is stated plainly instead of the ambiguous "Workers: 1"'
+  )
+
+  // The case the user suspected: plan made, load succeeded, nothing actually offloaded.
+  const cpuOnly = formatShardLoaded(good, 36, 4200, true, [
+    { backend: 'CPU', type: 'CPU', deviceName: 'cpu' },
+  ])
+  check(
+    cpuOnly.includes('NO RPC DEVICE REGISTERED'),
+    'a load with no RPC device is called out — the split was planned and not taken'
+  )
+  check(
+    cpuOnly.includes('192.168.1.11:50052'),
+    'and it names the address that was expected to connect'
+  )
+
+  const unread = formatShardLoaded(good, 36, 4200, true, [])
+  check(unread.includes('UNVERIFIED'), 'an unreadable device list is admitted, not assumed good')
+}
+
 // --- the load report catches the failure that cost the most time ---
 {
   const text = formatShardLoaded(good, 0, 4200, true)

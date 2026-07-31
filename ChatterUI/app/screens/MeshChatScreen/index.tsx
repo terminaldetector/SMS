@@ -36,7 +36,7 @@ import HeaderButton from '@components/views/HeaderButton'
 import HeaderTitle from '@components/views/HeaderTitle'
 import SettingsDrawer from '@components/views/SettingsDrawer'
 import { Llama } from '@lib/engine/Local/LlamaLocal'
-import { activeOf, buildBranchPrompt, MeshTurn, useHelixChat } from '@lib/helixChat'
+import { activeOf, buildBranchMessages, buildBranchPrompt, MeshTurn, useHelixChat } from '@lib/helixChat'
 import { meshRunBlocker, runMeshTurn } from '@lib/helixChatRun'
 import { buildBranchPromptExact } from '@lib/helixChatTokens'
 import { MultimodalStatus, probeMultimodal } from '@lib/helixMultimodal'
@@ -156,9 +156,12 @@ const MeshChatScreen = () => {
         const userTurn: MeshTurn = { role: 'user', text, images: sentImages, at: Date.now() }
         const allTurns = [...branch.turns, userTurn]
         const reasoning = helixReasoning()
+        // Sharder runs this phone's own model, so it gets real messages and llama.cpp applies that
+        // model's chat template. Pointer has to send a string — the answering phone's model is its
+        // own, and only it knows how to format for itself.
         const built =
             mode === 'sharder'
-                ? await buildBranchPromptExact(allTurns, contextBudget, 512, { reasoning })
+                ? buildBranchMessages(allTurns, contextBudget)
                 : buildBranchPrompt(allTurns, contextBudget, 512, { reasoning })
 
         addTurn(mode, userTurn)
@@ -175,8 +178,9 @@ const MeshChatScreen = () => {
                 )
 
             let streamed = ''
-            const answer = await runMeshTurn(mode, built.prompt, {
+            const answer = await runMeshTurn(mode, 'prompt' in built ? built.prompt : '', {
                 images: sentImages,
+                ...('messages' in built ? { messages: built.messages } : {}),
                 onToken: (chunk) => {
                     streamed += chunk
                     updateLastAssistant(mode, streamed)

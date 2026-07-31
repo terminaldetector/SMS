@@ -77,6 +77,15 @@ export namespace Logger {
         console.log(`${LevelName[log.level]}${log.timestamp}: ${log.message}`)
     }
 
+    // Set by the mesh when this phone joins as an agent, so its warnings also reach the host's
+    // screen. A plain hook rather than an import: the logger is used everywhere and must not start
+    // depending on the mesh, which would make every log line a reason to load networking code.
+    let mirror: ((level: 'warn' | 'error', text: string) => void) | null = null
+
+    export const setMirror = (fn: ((level: 'warn' | 'error', text: string) => void) | null) => {
+        mirror = fn
+    }
+
     export const info = (data: string) => {
         const logItem = createLog(data, LogLevel.INFO)
         printLog(logItem)
@@ -92,6 +101,7 @@ export namespace Logger {
         const logItem = createLog(data, LogLevel.WARN)
         printLog(logItem)
         insertLogs(logItem)
+        mirror?.('warn', data)
     }
 
     export const warnToast = (data: string) => {
@@ -103,6 +113,7 @@ export namespace Logger {
         const logItem = createLog(data, LogLevel.ERROR)
         printLog(logItem)
         insertLogs(logItem)
+        mirror?.('error', data)
     }
 
     export const errorToast = (data: string) => {

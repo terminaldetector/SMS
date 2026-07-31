@@ -37,6 +37,7 @@ import { planLocalShard } from '@lib/helixRpc'
 import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { hybridBlocker, HYBRID_TARGET } from '@lib/helixEngines'
+import { clearNetLog, formatNetLog, netLog, onNetLogChange, shouldReport } from '@lib/helixNetLog'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
     formatShardLoaded,
@@ -361,6 +362,11 @@ const HelixMeshScreen = () => {
     // reconnects, and the UI should say so rather than keep claiming "online".
     const [agentOnline, setAgentOnline] = useState(meshSession.agentOnline)
     const [showQrSheet, setShowQrSheet] = useState(false)
+    // The mesh's shared log. A counter rather than a copy of the list: the entries are a mutable
+    // module array by design (it is a ring buffer on a phone), so what a screen needs is a nudge
+    // to re-read it, not a snapshot to diff.
+    const [netLogTick, setNetLogTick] = useState(0)
+    useEffect(() => onNetLogChange(() => setNetLogTick((n) => n + 1)), [])
     // Ports live in Settings now. Subscribed to rather than read once, so changing one updates what
     // this screen tells people to connect to — a stale port in the QR is a connection that never
     // arrives with nothing on screen explaining why. A mesh already hosting keeps the port it bound.
@@ -551,6 +557,12 @@ const HelixMeshScreen = () => {
             meshSession.agent = node
             setAgentJoined(true)
             setAgentOnline(true)
+            // From here this phone's warnings and errors also appear on the host's screen. That
+            // is the whole point of the shared log: the questions worth asking about a two-phone
+            // mesh are about the gap between the two sides, and neither log alone can answer them.
+            Logger.setMirror((level, text) => {
+                if (shouldReport(level)) agentRef.current?.report(level, text)
+            })
             Logger.infoToast(`Joined mesh as agent ${agentId}`)
         } catch (e) {
             Logger.errorToast(`Join failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -560,6 +572,7 @@ const HelixMeshScreen = () => {
     }
 
     const onLeaveAgent = () => {
+        Logger.setMirror(null)
         agentRef.current?.close()
         agentRef.current = null
         meshSession.agent = null
@@ -951,15 +964,25 @@ const HelixMeshScreen = () => {
                 // Without this every layer stays on this phone regardless of the split.
                 n_layers: nLayers,
             })
-            // What the load actually did, as opposed to what it was asked to do. `sharded` false
-            // here means the load fell through to the ordinary path and the split was never taken.
+            // What the load actually did, as opposed to what it was asked to do. The device list
+            // is llama.cpp's own: an RPC entry is the only real proof the far phone is in the
+            // graph, and its absence is the difference between a shard and a model quietly loaded
+            // whole here — which on a small model looks and performs almost the same.
+            let devices: { backend: string; type: string; deviceName: string }[] = []
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                devices = (await require('cui-llama.rn').getBackendDevicesInfo()) ?? []
+            } catch {
+                /* reported as UNVERIFIED below rather than guessed at */
+            }
             Logger.info(
                 '\n' +
                     formatShardLoaded(
                         plan,
                         nLayers,
                         Date.now() - startedAt,
-                        Llama.useLlamaModelStore.getState().sharded
+                        Llama.useLlamaModelStore.getState().sharded,
+                        devices
                     )
             )
             Logger.infoToast(`Sharded across ${plan.ring.length} phones`)
@@ -1497,6 +1520,31 @@ const HelixMeshScreen = () => {
                 />
             </View>
                 </>
+            )}
+
+            {/* One log for both phones. Only the host has it: it is the side that can interleave
+                its own events with what the others reported, and a mesh has exactly one. */}
+            {hosting && (
+                <View style={styles.agentBox}>
+                    <Text style={styles.section}>Mesh log</Text>
+                    <Text style={styles.dim}>
+                        Warnings and errors from every joined phone, in one place. Their clocks do
+                        not agree, so these are timed by when this phone received them.
+                    </Text>
+                    <View style={styles.resultBox}>
+                        <Text style={styles.result} selectable>
+                            {formatNetLog(netLog())}
+                        </Text>
+                    </View>
+                    {netLog().length > 0 && (
+                        <ThemedButton
+                            label="Clear"
+                            variant="secondary"
+                            onPress={clearNetLog}
+                            buttonStyle={styles.gap}
+                        />
+                    )}
+                </View>
             )}
 
             <ElizaSheet visible={showEliza} setVisible={setShowEliza} />

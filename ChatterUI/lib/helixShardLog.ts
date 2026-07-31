@@ -192,20 +192,63 @@ export function formatShardMemory(m: ShardDeviceMemory, rpcAddr?: string): strin
     ].join('\n')
 }
 
-/** What the context reports after a sharded load — the check that the split was actually taken. */
+export interface BackendDevice {
+    backend: string
+    type: string
+    deviceName: string
+    maxMemorySize?: number
+}
+
+/**
+ * What the context reports after a sharded load — the check that the split was actually taken.
+ *
+ * "Workers: 1" was a true statement that read as a complaint, and it answered the wrong question.
+ * The number that matters is not how many workers were asked for but whether llama.cpp actually
+ * registered them: an rpc-server that never connected leaves the model loaded whole on this phone,
+ * running perfectly, at a speed nothing distinguishes from a working shard on a small model.
+ *
+ * `devices` is llama.cpp's own list. An entry whose backend is RPC is proof the far phone is in
+ * the graph; no such entry means the layers never left, whatever the plan said.
+ */
 export function formatShardLoaded(
     plan: RpcClusterPlan,
     gpuLayers: number,
     loadMs: number,
-    sharded: boolean
+    sharded: boolean,
+    devices: BackendDevice[] = []
 ): string {
+    const rpcDevices = devices.filter(
+        (d) => /rpc/i.test(d.backend) || /rpc/i.test(d.type) || /rpc/i.test(d.deviceName)
+    )
+    const wanted = plan.rpc_arg ? plan.rpc_arg.split(',').filter(Boolean) : []
+
     const lines = [
         '------ SHARD LOADED -----',
         `Took ${(loadMs / 1000).toFixed(1)}s`,
+        `Phones in the ring: ${plan.ring.length} (this one + ${plan.ring.length - 1} holding layers)`,
         `Context marked sharded: ${sharded}`,
         `n_gpu_layers requested: ${gpuLayers} of ${plan.n_layers}`,
-        `Workers: ${plan.ring.length - 1}`,
     ]
+
+    if (devices.length === 0) {
+        lines.push('Backend devices: could not be read — offload is UNVERIFIED')
+    } else {
+        lines.push(`Backend devices: ${devices.map((d) => `${d.backend}/${d.deviceName}`).join(', ')}`)
+        if (rpcDevices.length === 0)
+            lines.push(
+                `  ! NO RPC DEVICE REGISTERED — the ${wanted.length} worker(s) were asked for and ` +
+                    'llama.cpp did not connect to any. Every layer is running on THIS phone; the ' +
+                    'split was planned and then not taken. Check the worker tapped "Share this ' +
+                    `phone's RAM" and is reachable at ${wanted.join(', ') || '(no address)'}.`
+            )
+        else if (rpcDevices.length < wanted.length)
+            lines.push(
+                `  ! only ${rpcDevices.length} of ${wanted.length} workers connected — the rest of ` +
+                    'their layers fell back to this phone'
+            )
+        else lines.push(`  ✓ ${rpcDevices.length} RPC device(s) in the graph — layers really left this phone`)
+    }
+
     // The failure that cost the most time: layers eligible to leave the phone were capped at 0, so
     // the split was planned, logged, and then quietly ignored by llama.cpp.
     if (gpuLayers <= 0)

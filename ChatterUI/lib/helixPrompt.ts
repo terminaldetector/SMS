@@ -78,6 +78,70 @@ export interface BuiltPrompt {
     estimatedTokens: number
 }
 
+export interface ChatMessage {
+    role: 'system' | 'user' | 'assistant'
+    content: string
+}
+
+export interface BuiltMessages {
+    messages: ChatMessage[]
+    dropped: number
+    estimatedTokens: number
+}
+
+/**
+ * The same trimmed history, as MESSAGES rather than one flat transcript.
+ *
+ * This is what an instruct-tuned model actually expects. Handed "User: …\nAssistant:" as plain
+ * text, Qwen3.5 did not answer the question — it commented on the input, in English, mid-answer:
+ * "I am confused by the structure of the input provided in the `user` message block". It was being
+ * shown a transcript in a slot where its template puts a single message, so it treated the whole
+ * conversation as one confusing user turn, repeated an earlier answer, and reasoned about the
+ * formatting instead of the question.
+ *
+ * Messages go to llama.cpp, which applies the model's OWN chat template out of the GGUF metadata.
+ * That is the only formatting guaranteed to match what the model was trained on, and it is already
+ * in the file — inventing our own was the mistake.
+ *
+ * The flat form above is still used for Pointer: the wire carries a prompt string, and the
+ * answering phone applies its own model's template to it at the far end.
+ */
+export function buildBranchMessages(
+    turns: MeshTurn[],
+    budgetTokens: number,
+    reserveForAnswer = 512
+): BuiltMessages {
+    const budget = Math.max(256, budgetTokens - reserveForAnswer)
+
+    // Same walk as buildBranchPrompt: newest first, oldest dropped when the budget runs out.
+    let start = 0
+    let used = estimateTokens(MESH_PREAMBLE)
+    for (let i = turns.length - 1; i >= 0; i--) {
+        const cost = estimateTokens(turns[i].text) + 8 // ~role/template overhead per message
+        if (used + cost > budget) {
+            start = i + 1
+            break
+        }
+        used += cost
+    }
+    let kept = turns.slice(start)
+    if (!kept.length && turns.length) kept = turns.slice(-1)
+
+    // A conversation must not open on an assistant turn — a template that alternates strictly
+    // would either reject it or silently pair it with an empty user message.
+    while (kept.length && kept[0].role === 'assistant') kept = kept.slice(1)
+
+    const messages: ChatMessage[] = [
+        { role: 'system', content: MESH_PREAMBLE },
+        ...kept.map((t) => ({ role: t.role, content: t.text }) as ChatMessage),
+    ]
+    return {
+        messages,
+        dropped: turns.length - kept.length,
+        estimatedTokens: used,
+    }
+}
+
 /**
  * Assemble a branch into one prompt, oldest turns dropped first when the budget runs out.
  *

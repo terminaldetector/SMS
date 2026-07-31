@@ -227,4 +227,4 @@ export const useHelixChat = create<HelixChatState>()(
 
 // Re-exported so a screen needs one import for a conversation and its turns.
 export type { MeshTurn } from './helixPrompt'
-export { buildBranchPrompt, estimateTokens } from './helixPrompt'
+export { buildBranchMessages, buildBranchPrompt, estimateTokens } from './helixPrompt'

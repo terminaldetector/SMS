@@ -6,7 +6,7 @@
 // Sharder runs this phone's own context, which happens to have most of its layers somewhere else.
 
 import { Llama } from './engine/Local/LlamaLocal'
-import { MESH_STOP_SEQUENCES, stripReasoning, trimAtStopSequence } from './helixPrompt'
+import { ChatMessage, MESH_STOP_SEQUENCES, stripReasoning, trimAtStopSequence } from './helixPrompt'
 import { meshSession, MeshMode } from './helixSession'
 import { helixReasoning } from './helixSettings'
 
@@ -14,12 +14,18 @@ export interface MeshRunOptions {
     images?: string[]
     nPredict?: number
     onToken?: (chunk: string) => void
+    /**
+     * Sharder path only. When present these are sent instead of `prompt`, and llama.cpp applies
+     * the model's own chat template from the GGUF — the only formatting the model was trained on.
+     * Pointer cannot use it: the wire carries a prompt string, and the far phone templates it.
+     */
+    messages?: ChatMessage[]
 }
 
 export async function runMeshTurn(
     mode: MeshMode,
     prompt: string,
-    { images = [], nPredict = 256, onToken }: MeshRunOptions = {}
+    { images = [], nPredict = 256, onToken, messages }: MeshRunOptions = {}
 ): Promise<string> {
     if (mode === 'pointer') {
         const coord = meshSession.coord
@@ -40,8 +46,13 @@ export async function runMeshTurn(
     let out = ''
     await store.completion(
         {
-            prompt,
+            // Messages win when we have them; `prompt` stays as the fallback for a build whose
+            // model has no chat template in its metadata, where llama.cpp cannot format anything.
+            ...(messages?.length ? { messages } : { prompt }),
             n_predict: nPredict,
+            // llama.cpp's own switch, and better than asking in the prompt: it drives the
+            // template's thinking section rather than hoping the model reads an instruction.
+            enable_thinking: helixReasoning(),
             // The rule the preamble only asks for. Without it the model carries on writing the
             // user's next turn and its own answer to it, which is what a bare transcript invites.
             stop: MESH_STOP_SEQUENCES,

@@ -13,6 +13,7 @@ import {
   estimateTokens,
   MESH_PREAMBLE,
   MESH_STOP_SEQUENCES,
+  buildBranchMessages,
   trimAtStopSequence,
 } from '../../../ChatterUI/lib/helixPrompt.ts'
 
@@ -140,6 +141,51 @@ const turn = (role, text) => ({ role, text, at: 0 })
     trimAtStopSequence(runOn) === 'Зонтик — это растение.',
     'the repeated-transcript answer seen on device is cut back to the one real reply'
   )
+}
+
+// --- messages, which is what an instruct model actually expects ---
+//
+// Handed the flat transcript instead, Qwen3.5 answered by commenting on the input: "I am confused
+// by the structure of the input provided in the `user` message block". These assertions are about
+// the shape that stops that happening.
+{
+  const turns = [
+    turn('user', 'my name is Ada'),
+    turn('assistant', 'Hello Ada.'),
+    turn('user', 'what is my name?'),
+  ]
+  const built = buildBranchMessages(turns, 8192)
+  check(built.messages[0].role === 'system', 'the lead-in is a system message, not glued to a user turn')
+  check(built.messages[0].content === MESH_PREAMBLE, 'and it is the same lead-in')
+  check(built.messages.length === turns.length + 1, 'every turn that fits becomes its own message')
+  check(
+    built.messages[1].role === 'user' && built.messages[1].content === 'my name is Ada',
+    'a turn carries its own text, with no "User:" prefix for the model to puzzle over'
+  )
+  check(
+    built.messages[built.messages.length - 1].role === 'user',
+    'the conversation ends on the user, so the template asks for an assistant reply'
+  )
+  check(built.dropped === 0, 'nothing is dropped when it all fits')
+}
+
+// --- a conversation must never open on an assistant turn ---
+{
+  // What a forked branch or an aggressive trim can easily produce.
+  const built = buildBranchMessages([turn('assistant', 'orphaned'), turn('user', 'hi')], 8192)
+  const roles = built.messages.slice(1).map((m) => m.role)
+  check(roles[0] === 'user', 'a leading assistant turn is dropped rather than sent to a strict template')
+}
+
+// --- trimming still drops the oldest first ---
+{
+  const turns = []
+  for (let i = 0; i < 60; i++) turns.push(turn(i % 2 ? 'assistant' : 'user', `line ${i} ` + 'x'.repeat(200)))
+  const built = buildBranchMessages(turns, 1024)
+  check(built.dropped > 0, 'messages over budget do drop turns')
+  const joined = built.messages.map((m) => m.content).join('\n')
+  check(joined.includes('line 59'), 'the newest turn survives')
+  check(!joined.includes('line 0 '), 'the oldest turn is the one dropped')
 }
 
 console.log(`\nALL PASSED (${pass} checks)`)
