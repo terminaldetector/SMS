@@ -47,3 +47,22 @@ dependencyResolutionManagement {
 rootProject.name = "AI Edge Gallery"
 
 include(":app")
+
+// Distilled GEDGE modules for Chatter Triangle / host apps
+include(":edge:core")
+include(":edge:llm")
+include(":edge:embedder")
+include(":edge:rag")
+include(":edge:websearch")
+include(":edge:mcp")
+include(":edge:tools-mobile")
+include(":edge:tools-coder")
+
+project(":edge:core").projectDir = file("edge/core")
+project(":edge:llm").projectDir = file("edge/llm")
+project(":edge:embedder").projectDir = file("edge/embedder")
+project(":edge:rag").projectDir = file("edge/rag")
+project(":edge:websearch").projectDir = file("edge/websearch")
+project(":edge:mcp").projectDir = file("edge/mcp")
+project(":edge:tools-mobile").projectDir = file("edge/tools-mobile")
+project(":edge:tools-coder").projectDir = file("edge/tools-coder")

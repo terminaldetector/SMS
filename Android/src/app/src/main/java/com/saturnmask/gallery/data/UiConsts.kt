@@ -14,13 +14,9 @@
  * limitations under the License.
  */
 
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
-plugins {
-  alias(libs.plugins.android.application) apply false
-  alias(libs.plugins.android.library) apply false
-  alias(libs.plugins.google.services) apply false
-  alias(libs.plugins.kotlin.android) apply false
-  alias(libs.plugins.kotlin.compose) apply false
-  alias(libs.plugins.hilt.application) apply false
-  alias(libs.plugins.ksp) apply false
-}
+package com.saturnmask.gallery.data
+
+import androidx.compose.ui.unit.dp
+
+/** The size the icon shown under each of the model names in the model list screen. */
+val MODEL_INFO_ICON_SIZE = 18.dp

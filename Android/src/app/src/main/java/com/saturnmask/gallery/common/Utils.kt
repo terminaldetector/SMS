@@ -56,13 +56,7 @@ private const val TAG = "AGUtils"
 
 const val LOCAL_URL_BASE = "https://appassets.androidplatform.net"
 
-fun cleanUpMediapipeTaskErrorMessage(message: String): String {
-  val index = message.indexOf("=== Source Location Trace")
-  if (index >= 0) {
-    return message.substring(0, index)
-  }
-  return message
-}
+// cleanUpMediapipeTaskErrorMessage lives in :edge:llm (same package).
 
 fun processLlmResponse(response: String): String {
   return response.replace("\\n", "\n")

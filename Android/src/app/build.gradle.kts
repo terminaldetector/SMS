@@ -71,6 +71,16 @@ android {
 }
 
 dependencies {
+  // Distilled GEDGE modules (Chatter Triangle / host integration surface)
+  implementation(project(":edge:core"))
+  implementation(project(":edge:llm"))
+  implementation(project(":edge:embedder"))
+  implementation(project(":edge:rag"))
+  implementation(project(":edge:websearch"))
+  implementation(project(":edge:mcp"))
+  implementation(project(":edge:tools-mobile"))
+  implementation(project(":edge:tools-coder"))
+
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)

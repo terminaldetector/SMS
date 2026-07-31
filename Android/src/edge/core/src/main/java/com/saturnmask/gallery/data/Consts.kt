@@ -17,7 +17,6 @@
 package com.saturnmask.gallery.data
 
 import android.os.Build
-import androidx.compose.ui.unit.dp
 
 // Keys used to send/receive data to Work.
 const val KEY_MODEL_URL = "KEY_MODEL_URL"
@@ -75,9 +74,6 @@ const val MAX_AUDIO_CLIP_DURATION_SEC = 30
 
 // Audio-recording related consts.
 const val SAMPLE_RATE = 16000
-
-// The size the icon shown under each of the model names in the model list screen.
-val MODEL_INFO_ICON_SIZE = 18.dp
 
 // The extension of the tmp download files.
 const val TMP_FILE_EXT = "gallerytmp"
