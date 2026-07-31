@@ -30,5 +30,6 @@ dependencies {
   implementation(libs.mlkit.genai.prompt)
   implementation(libs.hilt.android)
   implementation(libs.androidx.lifecycle.runtime.ktx)
+  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
   kapt(libs.hilt.android.compiler)
 }
