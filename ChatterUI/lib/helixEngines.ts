@@ -53,14 +53,22 @@ export const ENGINES: Record<EngineId, EngineCapabilities> = {
         note: 'llama.cpp via cui-llama.rn. Runs Pointer and Sharder today.',
     },
     litert: {
+        // The Kotlin side is now in this repository (Android/src/edge, Android/src/edge-distilled:
+        // LiteRTInference, InferenceEngine, EngineRegistry, AgentRunnerLiteRt). What is missing is
+        // the bridge that lets JavaScript call it — an Expo module, as modules/wifi-hotspot and
+        // modules/bitchat-ble are. Until that exists this stays false, because the alternative is
+        // a registry that says yes and then cannot deliver, which turns a missing bridge into a
+        // crash somewhere unrelated.
         available: false,
-        // Sharding is not merely unimplemented here — it is llama.cpp's RPC backend specifically,
-        // and LiteRT has no equivalent. A LiteRT device joins a Hybrid mesh as a whole small agent
-        // or not at all, which is a design constraint rather than a to-do.
+        // Not merely unimplemented: sharding is llama.cpp's RPC backend specifically, and LiteRT
+        // has no equivalent. A LiteRT device joins a Hybrid mesh as a whole small agent or not at
+        // all — a design constraint, not a to-do.
         sharding: false,
+        // LiteRTInference accepts images and audio; the flag follows what this app can reach,
+        // which is nothing until the bridge exists.
         vision: false,
         roles: ['shell'],
-        note: 'Not in this build. Planned as the Hybrid shell: small models answering lookups in parallel while the core thinks.',
+        note: 'Kotlin engine merged (Android/src/edge-distilled) but not yet reachable from JS — the Expo bridge is the remaining step. Planned as the Hybrid shell: small models answering lookups in parallel while the core thinks.',
     },
 }
 
