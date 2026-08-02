@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      LiteRT-LM declares minSdk 31, and TriangleUI supports lower. Overriding here keeps the app
+      installable on those phones instead of raising the floor for everyone to gain an engine most
+      of them would not use; EdgeLiteRtModule.isAvailable() then reports false below 31, so the
+      engine registry simply does not offer it. The alternative — raising the app's minSdk — trades
+      away every Android 11 and older device for a feature, silently.
+    -->
+    <uses-sdk tools:overrideLibrary="com.google.ai.edge.litertlm, com.google.mlkit.genai.prompt" />
+</manifest>

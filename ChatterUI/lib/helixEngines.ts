@@ -15,6 +15,7 @@
 // Llama.useLlamaModelStore. Every place that does is a place that has to change when a second
 // engine arrives, and they are cheaper to find now than mid-port.
 
+import { edgeLiteRtAvailable } from '../modules/edge-litert'
 import { MeshMode } from './helixSession'
 
 export type EngineId = 'gguf' | 'litert'
@@ -42,6 +43,8 @@ export interface EngineCapabilities {
     note: string
 }
 
+// Built once per app run. Availability is a property of the APK, not of anything that changes
+// while it is running, and re-asking the native module on every render would be pure cost.
 export const ENGINES: Record<EngineId, EngineCapabilities> = {
     gguf: {
         available: true,
@@ -53,22 +56,19 @@ export const ENGINES: Record<EngineId, EngineCapabilities> = {
         note: 'llama.cpp via cui-llama.rn. Runs Pointer and Sharder today.',
     },
     litert: {
-        // The Kotlin side is now in this repository (Android/src/edge, Android/src/edge-distilled:
-        // LiteRTInference, InferenceEngine, EngineRegistry, AgentRunnerLiteRt). What is missing is
-        // the bridge that lets JavaScript call it — an Expo module, as modules/wifi-hotspot and
-        // modules/bitchat-ble are. Until that exists this stays false, because the alternative is
-        // a registry that says yes and then cannot deliver, which turns a missing bridge into a
-        // crash somewhere unrelated.
-        available: false,
+        // Asked of the build rather than declared: the module is only present in an APK that
+        // actually compiled it, and a registry claiming an engine it cannot reach turns a missing
+        // bridge into a crash somewhere unrelated.
+        available: edgeLiteRtAvailable(),
         // Not merely unimplemented: sharding is llama.cpp's RPC backend specifically, and LiteRT
         // has no equivalent. A LiteRT device joins a Hybrid mesh as a whole small agent or not at
         // all — a design constraint, not a to-do.
         sharding: false,
-        // LiteRTInference accepts images and audio; the flag follows what this app can reach,
-        // which is nothing until the bridge exists.
-        vision: false,
+        // LiteRTInference takes images and audio when the model declares support; the load call
+        // carries those flags. Only meaningful once the module is actually there.
+        vision: edgeLiteRtAvailable(),
         roles: ['shell'],
-        note: 'Kotlin engine merged (Android/src/edge-distilled) but not yet reachable from JS — the Expo bridge is the remaining step. Planned as the Hybrid shell: small models answering lookups in parallel while the core thinks.',
+        note: 'LiteRT-LM via modules/edge-litert. The Hybrid shell: small models answering lookups in parallel while the core thinks.',
     },
 }
 

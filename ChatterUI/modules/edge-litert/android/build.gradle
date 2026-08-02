@@ -1,0 +1,40 @@
+// The LiteRT (Google AI Edge) engine, as a local Expo module.
+//
+// The distilled sources arrived as eight :edge:* Gradle library modules, which is the right shape
+// for the Gallery repo and the wrong one here: `expo prebuild` regenerates ChatterUI/android/ from
+// scratch, so any settings.gradle entry pointing at them is deleted on the next build. Expo
+// autolinks local modules and uses this file as-is, so the sources live inside the module instead.
+// EDGE_INVENTORY.md offers exactly this as the alternative ("or copy edge-distilled/ sources into
+// the Triangle repo").
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.edgelitert'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.edgelitert"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+  // litertlm ships prebuilt .so files; two copies of libLiteRt.so is a packaging failure, which is
+  // why com.google.ai.edge.litert:litert must NOT also be added (EDGE_INVENTORY.md, conflicts).
+  packagingOptions {
+    pickFirst '**/libc++_shared.so'
+  }
+}
+
+dependencies {
+  implementation 'com.google.ai.edge.litertlm:litertlm-android:0.11.0'
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+  implementation 'com.google.code.gson:gson:2.11.0'
+  implementation 'androidx.core:core-ktx:1.13.1'
+  implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
+  // Optional AICore path (Model.runtimeHelper routes LITERT_LM vs AICORE). Package-allowlisted by
+  // Google, so it is inert on most devices — kept so the fork's behaviour is not silently reduced.
+  implementation 'com.google.mlkit:genai-prompt:1.0.0-beta2'
+}

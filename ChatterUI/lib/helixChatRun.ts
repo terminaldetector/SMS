@@ -5,12 +5,21 @@
 // not one call with a flag — Pointer hands a prompt to another phone and waits for a whole answer;
 // Sharder runs this phone's own context, which happens to have most of its layers somewhere else.
 
+import { EdgeLiteRt } from '../modules/edge-litert'
 import { Llama } from './engine/Local/LlamaLocal'
+import { EngineId } from './helixEngines'
 import { ChatMessage, MESH_STOP_SEQUENCES, stripReasoning, trimAtStopSequence } from './helixPrompt'
 import { meshSession, MeshMode } from './helixSession'
 import { helixReasoning } from './helixSettings'
 
 export interface MeshRunOptions {
+    /**
+     * Which engine runs this turn. Defaults to GGUF, which is what every existing caller means.
+     *
+     * LiteRT takes a plain prompt: its own conversation applies whatever template the .litertlm
+     * carries, so handing it the message list would be formatting a second time on top of that.
+     */
+    engine?: EngineId
     images?: string[]
     nPredict?: number
     onToken?: (chunk: string) => void
@@ -31,7 +40,7 @@ let inFlight = false
 export async function runMeshTurn(
     mode: MeshMode,
     prompt: string,
-    { images = [], nPredict = 256, onToken, messages }: MeshRunOptions = {}
+    { images = [], nPredict = 256, onToken, messages, engine = 'gguf' }: MeshRunOptions = {}
 ): Promise<string> {
     if (mode === 'pointer') {
         const coord = meshSession.coord
@@ -46,6 +55,8 @@ export async function runMeshTurn(
         onToken?.(answer)
         return answer
     }
+
+    if (engine === 'litert') return runLiteRt(prompt, onToken)
 
     const store = Llama.useLlamaModelStore.getState()
     if (!store.context) throw new Error('no model is loaded on this phone')
@@ -84,6 +95,28 @@ export async function runMeshTurn(
     // Streamed tokens can already carry the start of a leaked turn before the stop sequence fires,
     // so the final text is cleaned too — the transcript keeps this, not the stream.
     return clean(out)
+}
+
+/**
+ * One turn on the LiteRT engine.
+ *
+ * Streaming comes back as events rather than a callback, so the subscription is set up before
+ * generate() is called and torn down in a finally — an event listener that outlives its turn would
+ * have the next answer arriving in the previous one's chat.
+ */
+async function runLiteRt(prompt: string, onToken?: (chunk: string) => void): Promise<string> {
+    const native = EdgeLiteRt()
+    if (!native) throw new Error('this build has no LiteRT engine')
+    if (!native.isLoaded()) throw new Error('no LiteRT model is loaded — load one in HELIX Mesh')
+    if (inFlight) throw new Error('this phone is already answering something — wait for it to finish')
+    inFlight = true
+    const sub = onToken ? native.addListener('onToken', (e) => onToken(e.text)) : null
+    try {
+        return clean(await native.generate(prompt))
+    } finally {
+        sub?.remove()
+        inFlight = false
+    }
 }
 
 // The two things an answer needs before it is worth showing: no continuation of the conversation,
