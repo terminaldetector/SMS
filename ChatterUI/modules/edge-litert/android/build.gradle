@@ -47,7 +47,4 @@ dependencies {
   implementation 'com.google.code.gson:gson:2.11.0'
   implementation 'androidx.core:core-ktx:1.13.1'
   implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
-  // Optional AICore path (Model.runtimeHelper routes LITERT_LM vs AICORE). Package-allowlisted by
-  // Google, so it is inert on most devices — kept so the fork's behaviour is not silently reduced.
-  implementation 'com.google.mlkit:genai-prompt:1.0.0-beta2'
 }
