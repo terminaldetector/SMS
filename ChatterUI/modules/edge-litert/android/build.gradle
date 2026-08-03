@@ -21,6 +21,19 @@ android {
     versionName "0.1.0"
     consumerProguardFiles 'consumer-rules.pro'
   }
+  // litertlm-android 0.11.0 was built with Kotlin 2.3.0; Expo SDK 55 compiles this project with
+  // 2.1.0, which reads metadata only up to 2.2.0 — every reference to a litertlm class is an error
+  // without this. The alternative was raising the whole project's Kotlin version, which would
+  // recompile React Native and every Expo module to gain one engine; this stays inside this module.
+  //
+  // The flag is safe for what is used here — data classes, enums, interfaces and suspend functions,
+  // whose metadata shape has not changed between 2.1 and 2.3. It is NOT a general licence: if
+  // litertlm later exposes something the older compiler cannot model, this becomes a link error at
+  // runtime rather than a compile error, and the fix then is a matching Kotlin version.
+  kotlinOptions {
+    freeCompilerArgs += "-Xskip-metadata-version-check"
+  }
+
   // litertlm ships prebuilt .so files; two copies of libLiteRt.so is a packaging failure, which is
   // why com.google.ai.edge.litert:litert must NOT also be added (EDGE_INVENTORY.md, conflicts).
   packagingOptions {

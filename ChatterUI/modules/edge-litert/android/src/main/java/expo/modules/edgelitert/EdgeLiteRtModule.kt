@@ -34,7 +34,9 @@ import kotlinx.coroutines.launch
  */
 class EdgeLiteRtModule : Module() {
 
-    private val registry = EngineRegistry().apply { register(LiteRTInferenceEngine()) }
+    // Named `engineRegistry`, not `registry`: Expo's own Module has a `registry` member and
+    // shadowing it silently would be a landmine for anyone reading this later.
+    private val engineRegistry = EngineRegistry().apply { register(LiteRTInferenceEngine()) }
 
     // The engine's own generate() is callback-based and its load() is suspending, so the module
     // owns one scope rather than borrowing whichever thread a JS call arrived on. SupervisorJob:
@@ -65,7 +67,7 @@ class EdgeLiteRtModule : Module() {
         AsyncFunction("activate") { kind: String, promise: Promise ->
             scope.launch {
                 try {
-                    registry.activate(parseKind(kind))
+                    engineRegistry.activate(parseKind(kind))
                     promise.resolve(true)
                 } catch (e: Throwable) {
                     promise.reject("ERR_ACTIVATE", e.message ?: "could not activate $kind", e)
@@ -76,7 +78,7 @@ class EdgeLiteRtModule : Module() {
         AsyncFunction("load") { modelPath: String, modelId: String, supportImage: Boolean, supportAudio: Boolean, promise: Promise ->
             scope.launch {
                 try {
-                    registry.loadActive(
+                    engineRegistry.loadActive(
                         context,
                         EngineLoadRequest(
                             modelPath = modelPath,
@@ -100,7 +102,7 @@ class EdgeLiteRtModule : Module() {
          * chunks it may have missed while a screen was unmounted.
          */
         AsyncFunction("generate") { prompt: String, promise: Promise ->
-            val engine = registry.active()
+            val engine = engineRegistry.active()
             if (engine == null) {
                 promise.reject("ERR_NO_ENGINE", "no active engine — call activate() first", null)
                 return@AsyncFunction
@@ -135,12 +137,12 @@ class EdgeLiteRtModule : Module() {
             )
         }
 
-        Function("stop") { registry.active()?.stop() }
+        Function("stop") { engineRegistry.active()?.stop() }
 
         AsyncFunction("unload") { promise: Promise ->
             scope.launch {
                 try {
-                    registry.unloadActive()
+                    engineRegistry.unloadActive()
                     promise.resolve(true)
                 } catch (e: Throwable) {
                     promise.reject("ERR_UNLOAD", e.message ?: "could not unload", e)
@@ -148,9 +150,9 @@ class EdgeLiteRtModule : Module() {
             }
         }
 
-        Function("activeKind") { registry.active()?.kind?.name?.lowercase() }
+        Function("activeKind") { engineRegistry.active()?.kind?.name?.lowercase() }
 
-        Function("isLoaded") { registry.active()?.isLoaded == true }
+        Function("isLoaded") { engineRegistry.active()?.isLoaded == true }
     }
 
     private fun parseKind(kind: String): EngineKind =

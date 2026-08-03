@@ -17,7 +17,7 @@
 package com.saturnmask.gallery.data
 
 import androidx.annotation.StringRes
-import com.saturnmask.edge.core.R
+import expo.modules.edgelitert.R
 import kotlin.math.abs
 
 /**
