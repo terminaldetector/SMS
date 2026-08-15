@@ -397,7 +397,18 @@ object LlmChatModelHelper : LlmModelHelper {
 
   override fun stopResponse(model: Model) {
     val instance = model.instance as? LlmModelInstance ?: return
-    instance.conversation.cancelProcess()
+    try {
+      instance.conversation.cancelProcess()
+    } catch (e: Exception) {
+      // Confirmed real crash (CrashLogger capture from a real device, 2026-07-31):
+      // IllegalStateException "Conversation is not alive" from Conversation.cancelProcess(),
+      // uncaught, took the whole app down. stopResponse() is called unconditionally by
+      // resetSession() every time (regardless of whether anything is actually in-flight) and by
+      // the inactivity watchdog on timeout -- both are "stop it if it's running" best-effort calls,
+      // so a conversation that's already finished/torn down (nothing to cancel) is an expected,
+      // benign state here, not a real error.
+      Log.d(TAG, "stopResponse: nothing to cancel (${e.message})")
+    }
   }
 
   override fun runInference(

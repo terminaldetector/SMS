@@ -94,6 +94,7 @@ import com.saturnmask.gallery.common.SkillProgressAgentAction
 import com.saturnmask.gallery.data.AgentSkillsURLs
 import com.saturnmask.gallery.data.BuiltInTaskId
 import com.saturnmask.gallery.data.ConfigKeys
+import com.saturnmask.gallery.data.DEFAULT_MAX_TOKEN
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.ModelCapability
 import com.saturnmask.gallery.data.Task
@@ -1342,7 +1343,13 @@ private fun resetSessionWithCurrentSkillsAndMcps(
   webSearchEnabled: Boolean = true,
 ) {
   val model = modelManagerViewModel.uiState.value.selectedModel
-  val litertMessages = initialMessages.toLiteRtMessages()
+  // maxTokens caps the replay to the model's own configured budget -- see toLiteRtMessages's doc
+  // comment.
+  val litertMessages =
+    initialMessages.toLiteRtMessages(
+      maxTokens =
+        model.getIntConfigValue(key = ConfigKeys.MAX_TOKENS, defaultValue = DEFAULT_MAX_TOKEN)
+    )
   val toolsPrompt = agentTools.mcpManagerViewModel.getToolsPrompt()
   val actualSystemPrompt = getEffectiveBaseSystemPrompt(curSystemPrompt, toolsPrompt.isNotEmpty())
   val engineConfiguration =

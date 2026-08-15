@@ -54,6 +54,7 @@ import com.saturnmask.gallery.customtasks.agentchat.agentSkillTopK
 import com.saturnmask.gallery.customtasks.agentchat.agentSkillTopKAdjusted
 import com.saturnmask.gallery.data.BuiltInTaskId
 import com.saturnmask.gallery.data.ConfigKeys
+import com.saturnmask.gallery.data.DEFAULT_MAX_TOKEN
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.ModelCapability
 import com.saturnmask.gallery.data.ModelDownloadStatusType
@@ -290,7 +291,17 @@ fun ModelPageAppBar(
               },
               // A forced reinit (e.g. switching Accelerator) always creates a brand-new engine —
               // replay the current chat into it so the conversation isn't silently forgotten.
-              initialMessages = getCurrentMessages().toLiteRtMessages(),
+              // maxTokens caps the replay to the model's own configured budget -- see
+              // toLiteRtMessages's doc comment.
+              initialMessages =
+                getCurrentMessages()
+                  .toLiteRtMessages(
+                    maxTokens =
+                      model.getIntConfigValue(
+                        key = ConfigKeys.MAX_TOKENS,
+                        defaultValue = DEFAULT_MAX_TOKEN,
+                      )
+                  ),
             )
           }
 

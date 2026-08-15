@@ -32,7 +32,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -61,7 +60,12 @@ private const val ICON_SIZE_FACTOR = 0.3f
 @Composable
 fun RotationalLoader(size: Dp) {
   val infiniteTransition = rememberInfiniteTransition(label = "infinite")
-  val rotationProgress by
+  // Kept as State<Float> (not `by`-delegated) and read only inside graphicsLayer{} lambdas below,
+  // which run during layout/draw rather than composition -- reading a delegated `by` value here in
+  // the composable body instead would re-run this entire composable (rebuilding the whole grid,
+  // all 4 Image composables, and their brushes) on every animation frame for as long as any loader
+  // is shown, including the 160dp one during a whole multi-GB model download.
+  val rotationProgress =
     infiniteTransition.animateFloat(
       initialValue = 0f,
       targetValue = 1f,
@@ -71,7 +75,7 @@ fun RotationalLoader(size: Dp) {
           repeatMode = RepeatMode.Restart,
         ),
     )
-  val scaleProgress by
+  val scaleProgress =
     infiniteTransition.animateFloat(
       initialValue = 1f,
       targetValue = 0.4f,
@@ -81,8 +85,6 @@ fun RotationalLoader(size: Dp) {
           repeatMode = RepeatMode.Reverse,
         ),
     )
-  val curRotationZ = 45f + rotationProgress * 360f
-  val curScale = scaleProgress
 
   val gridSpacing = size * GRID_SPACING_FACTOR
   LazyVerticalGrid(
@@ -90,7 +92,9 @@ fun RotationalLoader(size: Dp) {
     horizontalArrangement = Arrangement.spacedBy(gridSpacing),
     verticalArrangement = Arrangement.spacedBy(gridSpacing),
     modifier =
-      Modifier.size(size).graphicsLayer { rotationZ = curRotationZ }.clearAndSetSemantics {},
+      Modifier.size(size)
+        .graphicsLayer { rotationZ = 45f + rotationProgress.value * 360f }
+        .clearAndSetSemantics {},
   ) {
     itemsIndexed(
       listOf(
@@ -128,9 +132,9 @@ fun RotationalLoader(size: Dp) {
               .graphicsLayer {
                 // This is important to make blending mode work.
                 alpha = 0.99f
-                rotationZ = -curRotationZ
-                scaleX = curScale
-                scaleY = curScale
+                rotationZ = -(45f + rotationProgress.value * 360f)
+                scaleX = scaleProgress.value
+                scaleY = scaleProgress.value
               }
               .drawWithContent {
                 drawContent()
