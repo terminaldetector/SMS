@@ -90,7 +90,13 @@ message McpAuth {
     string header_value = 2;
   }
 
-  message OAuth {}
+  message OAuth {
+    string access_token = 1;
+    string refresh_token = 2;
+    int64 expires_at_ms = 3;
+    // Space-separated granted scopes -- lets a future re-auth detect scope creep.
+    string scope = 4;
+  }
 
   oneof auth_method {
     bool none = 1;

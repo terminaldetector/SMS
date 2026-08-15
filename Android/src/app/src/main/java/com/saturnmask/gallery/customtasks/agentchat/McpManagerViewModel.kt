@@ -59,6 +59,10 @@ class McpManagerViewModel
 constructor(
   private val mcpServersDataStore: DataStore<McpServers>,
   private val userDataDataStore: DataStore<UserData>,
+  // Not private -- AddMcpServerFromUrlDialog.kt needs authService/getAuthorizationRequest() to
+  // launch the Google sign-in flow directly, the same way ModelManagerViewModel exposes its own
+  // HuggingFace `authService` to DownloadAndTryButton.kt.
+  val googleOAuthHelper: McpGoogleOAuthHelper,
 ) : ViewModel() {
   private val _uiState = MutableStateFlow(McpManagerUiState())
   val uiState = _uiState.asStateFlow()
@@ -223,9 +227,72 @@ constructor(
     }
   }
 
+  /**
+   * Persists an MCP server that was already authorized via Google OAuth (see
+   * AddMcpServerFromUrlDialog.kt's OAuth path, only reachable for the built-in Google Workspace
+   * presets) -- mirrors [addMcpServer]'s persistence steps, but skips the auth-type branching
+   * since OAuth is already resolved by the caller.
+   */
+  fun addMcpServerWithOAuthTokens(url: String, oauth: McpAuth.OAuth) {
+    _uiState.update { it.copy(loadingMcpServer = true, error = null) }
+    viewModelScope.launch(Dispatchers.IO) {
+      try {
+        val mcpAuth = McpAuth.newBuilder().setOauth(oauth).build()
+        val (client, mcpTools) = initializeClientAndLoadTools(url, mcpAuth = mcpAuth)
+        val serverVersion = client.serverVersion
+        val mcpServerProto =
+          McpServer.newBuilder()
+            .setUrl(url)
+            .addAllTools(mcpTools)
+            .setEnabled(true)
+            .apply {
+              serverVersion?.name?.let { setName(it) }
+              serverVersion?.version?.let { setVersion(it) }
+              val desc = mcpTools.joinToString(", ") { it.name }
+              if (desc.isNotEmpty()) {
+                setDescription("Tools: $desc")
+              }
+            }
+            .build()
+
+        val newState = McpServerState(mcpServer = mcpServerProto, client = client, error = null)
+
+        mcpServersDataStore.updateData { currentServers ->
+          val filtered = currentServers.mcpServerList.filter { it.url != url }
+          McpServers.newBuilder().addAllMcpServer(filtered + mcpServerProto).build()
+        }
+
+        userDataDataStore.updateData { currentUserData ->
+          currentUserData.toBuilder().putMcpAuths(url, mcpAuth).build()
+        }
+
+        _uiState.update { currentState ->
+          val filteredStates = currentState.mcpServers.filter { it.mcpServer.url != url }
+          currentState.copy(mcpServers = filteredStates + newState, loadingMcpServer = false)
+        }
+        Log.d(TAG, "Analytics: mcp_management, action=add_server_oauth, status=success")
+      } catch (e: Exception) {
+        Log.e(TAG, "Error adding MCP server with OAuth: $url", e)
+        _uiState.update { currentState ->
+          currentState.copy(error = e.message ?: "Failed to connect", loadingMcpServer = false)
+        }
+        Log.d(
+          TAG,
+          "Analytics: mcp_management, action=add_server_oauth, status=failed, error_type=${e.javaClass.simpleName}",
+        )
+      }
+    }
+  }
+
   /** Clears any connection error. */
   fun clearError() {
     _uiState.update { it.copy(error = null) }
+  }
+
+  /** Surfaces an error (e.g. a failed/cancelled Google OAuth attempt) via the same [McpManagerUiState.error]
+   *  the add-server flow already uses, so the UI doesn't need a second error-display mechanism. */
+  fun reportError(message: String) {
+    _uiState.update { it.copy(error = message, loadingMcpServer = false) }
   }
 
   /** Removes an MCP server by its URL from both the current UI state and persistent DataStore. */
@@ -390,17 +457,25 @@ constructor(
     // Retrieve authentication details from parameter or DataStore and configure the HTTP transport.
     val resolvedAuth = mcpAuth ?: userDataDataStore.data.first().mcpAuthsMap[url]
     val transport =
-      if (
-        resolvedAuth != null && resolvedAuth.authMethodCase == McpAuth.AuthMethodCase.REQUEST_HEADER
-      ) {
-        val reqHeader = resolvedAuth.requestHeader
-        StreamableHttpClientTransport(
-          client = httpClient,
-          url = url,
-          requestBuilder = { headers.append(reqHeader.headerName, reqHeader.headerValue) },
-        )
-      } else {
-        StreamableHttpClientTransport(client = httpClient, url = url)
+      when {
+        resolvedAuth != null &&
+          resolvedAuth.authMethodCase == McpAuth.AuthMethodCase.REQUEST_HEADER -> {
+          val reqHeader = resolvedAuth.requestHeader
+          StreamableHttpClientTransport(
+            client = httpClient,
+            url = url,
+            requestBuilder = { headers.append(reqHeader.headerName, reqHeader.headerValue) },
+          )
+        }
+        resolvedAuth != null && resolvedAuth.authMethodCase == McpAuth.AuthMethodCase.OAUTH -> {
+          val accessToken = resolveGoogleAccessToken(url, resolvedAuth.oauth)
+          StreamableHttpClientTransport(
+            client = httpClient,
+            url = url,
+            requestBuilder = { headers.append("Authorization", "Bearer $accessToken") },
+          )
+        }
+        else -> StreamableHttpClientTransport(client = httpClient, url = url)
       }
     client.connect(transport)
     val toolsResponse = client.listTools()
@@ -427,6 +502,42 @@ constructor(
       }
     Log.d(TAG, "Loaded ${mcpTools.size} tools from $url: ${mcpTools.joinToString { it.name }}")
     return Pair(client, mcpTools)
+  }
+
+  /**
+   * Returns a valid access token for [oauth], refreshing it first if it's expired or close to it
+   * (a real 5-minute buffer in milliseconds -- 5 * 60 * 1000 -- unlike the `5 * 60` typo in
+   * ModelManagerViewModel's analogous HuggingFace expiry check, which is effectively a
+   * ~0.3-second buffer, not fixed here since it's a separate, pre-existing, unrelated issue).
+   * Persists a refreshed token back into userDataDataStore so later calls reuse it instead of
+   * refreshing every time. Throws if refresh itself fails (e.g. the refresh token was revoked) --
+   * the caller's existing try/catch (loadMcpServers/addMcpServer/addMcpServerWithOAuthTokens)
+   * already turns that into the normal McpServerState.error path, no special-casing needed.
+   */
+  private suspend fun resolveGoogleAccessToken(url: String, oauth: McpAuth.OAuth): String {
+    val bufferMs = 5 * 60 * 1000L
+    if (System.currentTimeMillis() < oauth.expiresAtMs - bufferMs) {
+      return oauth.accessToken
+    }
+    val refreshed = googleOAuthHelper.refreshAccessToken(oauth.refreshToken)
+    if (refreshed.status != GoogleOAuthResultType.SUCCEEDED || refreshed.accessToken == null) {
+      throw IllegalStateException(refreshed.errorMessage ?: "Failed to refresh Google OAuth token")
+    }
+    val updatedOAuth =
+      oauth
+        .toBuilder()
+        .setAccessToken(refreshed.accessToken)
+        .setRefreshToken(refreshed.refreshToken ?: oauth.refreshToken)
+        .setExpiresAtMs(refreshed.expiresAtMs ?: oauth.expiresAtMs)
+        .apply { refreshed.scope?.let { setScope(it) } }
+        .build()
+    userDataDataStore.updateData { currentUserData ->
+      currentUserData
+        .toBuilder()
+        .putMcpAuths(url, McpAuth.newBuilder().setOauth(updatedOAuth).build())
+        .build()
+    }
+    return refreshed.accessToken
   }
 
   private fun persistServers(updatedServers: List<McpServerState>) {

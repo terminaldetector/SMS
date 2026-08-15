@@ -392,6 +392,11 @@
   <string name="mcp_server_authorization" translatable="true">Authorization</string>
   <string name="mcp_server_auth_none" translatable="true">None</string>
   <string name="mcp_server_auth_request_header" translatable="true">Request header</string>
+  <!-- Shown when the typed MCP server URL matches a built-in Google Workspace preset, so OAuth is
+       actually usable. [CHAR_LIMIT=NONE] -->
+  <string name="mcp_server_auth_oauth" translatable="true">OAuth</string>
+  <!-- Shown when OAuth isn't usable for the typed URL (not a known Google Workspace preset).
+       [CHAR_LIMIT=NONE] -->
   <string name="mcp_server_auth_oauth_wip" translatable="true">OAuth (WIP)</string>
   <string name="mcp_server_header_name" translatable="true">Header name</string>
   <string name="mcp_server_header_value" translatable="true">Header value</string>

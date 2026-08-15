@@ -17,6 +17,8 @@
 package com.saturnmask.gallery.customtasks.agentchat
 
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +65,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.saturnmask.gallery.R
+import com.saturnmask.gallery.domain.mcp.McpWorkspacePresets
 import com.saturnmask.gallery.proto.McpAuth
 import java.net.URI
 
@@ -90,6 +93,47 @@ fun AddMcpServerFromUrlDialog(
   var dropdownExpanded by remember { mutableStateOf(false) }
   var headerName by remember { mutableStateOf(TextFieldValue("")) }
   var headerValue by remember { mutableStateOf(TextFieldValue("")) }
+
+  // OAuth is only actually wired up for the built-in Google Workspace presets (see
+  // McpGoogleOAuthHelper.kt) -- this app has no way to know what OAuth provider/scopes an
+  // arbitrary MCP URL needs, so it's only offered when the typed URL exactly matches one.
+  val matchedWorkspacePreset =
+    remember(textFieldValue.text) {
+      McpWorkspacePresets.ALL.find { it.serverUrl == textFieldValue.text.trim() }
+    }
+  // Fall back out of OAuth if the URL changes to something that no longer matches a preset, so the
+  // dialog can't get stuck with a selected-but-now-invalid auth method.
+  LaunchedEffect(matchedWorkspacePreset) {
+    if (authType == McpAuth.AuthMethodCase.OAUTH && matchedWorkspacePreset == null) {
+      authType = McpAuth.AuthMethodCase.NONE
+    }
+  }
+
+  val googleAuthResultLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      mcpManagerViewModel.googleOAuthHelper.handleAuthResult(result) { oauthResult ->
+        when (oauthResult.status) {
+          GoogleOAuthResultType.SUCCEEDED -> {
+            val oauth =
+              McpAuth.OAuth.newBuilder()
+                .setAccessToken(oauthResult.accessToken!!)
+                .setRefreshToken(oauthResult.refreshToken!!)
+                .setExpiresAtMs(oauthResult.expiresAtMs!!)
+                .setScope(oauthResult.scope ?: "")
+                .build()
+            isAdding = true
+            mcpManagerViewModel.addMcpServerWithOAuthTokens(textFieldValue.text.trim(), oauth)
+          }
+          GoogleOAuthResultType.USER_CANCELLED -> {
+            // No-op -- the user backed out of the Google sign-in screen, nothing to report.
+          }
+          GoogleOAuthResultType.FAILED -> {
+            Log.e(TAG, "Google OAuth failed: ${oauthResult.errorMessage}")
+            mcpManagerViewModel.reportError(oauthResult.errorMessage ?: "Google sign-in failed")
+          }
+        }
+      }
+    }
 
   val safeDismiss: () -> Unit = {
     mcpManagerViewModel.clearError()
@@ -204,7 +248,7 @@ fun AddMcpServerFromUrlDialog(
                   McpAuth.AuthMethodCase.NONE -> stringResource(R.string.mcp_server_auth_none)
                   McpAuth.AuthMethodCase.REQUEST_HEADER ->
                     stringResource(R.string.mcp_server_auth_request_header)
-                  McpAuth.AuthMethodCase.OAUTH -> stringResource(R.string.mcp_server_auth_oauth_wip)
+                  McpAuth.AuthMethodCase.OAUTH -> stringResource(R.string.mcp_server_auth_oauth)
                   else -> stringResource(R.string.mcp_server_auth_none)
                 },
               onValueChange = {},
@@ -237,12 +281,21 @@ fun AddMcpServerFromUrlDialog(
                 },
               )
               DropdownMenuItem(
-                text = { Text(stringResource(R.string.mcp_server_auth_oauth_wip)) },
+                text = {
+                  Text(
+                    stringResource(
+                      if (matchedWorkspacePreset != null) R.string.mcp_server_auth_oauth
+                      else R.string.mcp_server_auth_oauth_wip
+                    )
+                  )
+                },
                 onClick = {
                   authType = McpAuth.AuthMethodCase.OAUTH
                   dropdownExpanded = false
                 },
-                enabled = false,
+                // Only wired up for the built-in Google Workspace presets -- see
+                // McpGoogleOAuthHelper.kt and matchedWorkspacePreset above.
+                enabled = matchedWorkspacePreset != null,
               )
             }
           }
@@ -312,6 +365,20 @@ fun AddMcpServerFromUrlDialog(
                 if (url.isNotEmpty()) {
                   if (mcpManagerViewModel.hasMcpServer(url)) {
                     showDuplicateWarningDialog = true
+                  } else if (authType == McpAuth.AuthMethodCase.OAUTH) {
+                    // Only reachable when matchedWorkspacePreset != null (the dropdown item is
+                    // disabled otherwise) -- the null check here is just defensive.
+                    matchedWorkspacePreset?.let { preset ->
+                      Log.d(TAG, "Analytics: mcp_management, action=add_server_oauth, status=launch")
+                      val authRequest =
+                        mcpManagerViewModel.googleOAuthHelper.getAuthorizationRequest(
+                          preset.oauthScopes
+                        )
+                      val authIntent =
+                        mcpManagerViewModel.googleOAuthHelper.authService
+                          .getAuthorizationRequestIntent(authRequest)
+                      googleAuthResultLauncher.launch(authIntent)
+                    }
                   } else if (isMcpHostApproved(url)) {
                     isAdding = true
                     mcpManagerViewModel.addMcpServer(
