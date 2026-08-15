@@ -39,11 +39,13 @@ android {
     versionCode = 37
     versionName = "1.0.17"
 
-    // Needed for HuggingFace auth workflows, and now also MCP's Google OAuth (see
-    // common/GoogleOAuthConfig.kt) -- shared by both, since this placeholder name is baked into the
-    // net.openid:appauth library's own manifest and isn't something a second, differently-named
-    // placeholder would actually wire up. Use the scheme of the "Redirect URLs" in the HuggingFace
-    // app; GoogleOAuthConfig.redirectUri must use this same scheme, just a different path.
+    // Needed for HuggingFace auth workflows, MCP's Google OAuth (common/GoogleOAuthConfig.kt), and
+    // MCP's generic discovered-provider OAuth (McpGenericOAuthConfig.kt in
+    // customtasks/agentchat/McpGenericOAuthHelper.kt) -- shared by all three, since this
+    // placeholder name is baked into the net.openid:appauth library's own manifest and isn't
+    // something a second, differently-named placeholder would actually wire up. Use the scheme of
+    // the "Redirect URLs" in the HuggingFace app; the other two configs' redirectUri constants
+    // must use this same scheme, just a different path each.
     manifestPlaceholders["appAuthRedirectScheme"] =
         "REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP"
     manifestPlaceholders["applicationName"] = "com.saturnmask.gallery.GalleryApplication"

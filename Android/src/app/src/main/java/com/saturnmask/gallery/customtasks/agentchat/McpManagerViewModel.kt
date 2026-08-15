@@ -21,6 +21,8 @@ import androidx.datastore.core.DataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saturnmask.gallery.BuildConfig
+import com.saturnmask.gallery.domain.mcp.DiscoveredOAuthConfig
+import com.saturnmask.gallery.domain.mcp.McpOAuthDiscovery
 import com.saturnmask.gallery.proto.McpAuth
 import com.saturnmask.gallery.proto.McpServer
 import com.saturnmask.gallery.proto.McpServers
@@ -63,6 +65,8 @@ constructor(
   // launch the Google sign-in flow directly, the same way ModelManagerViewModel exposes its own
   // HuggingFace `authService` to DownloadAndTryButton.kt.
   val googleOAuthHelper: McpGoogleOAuthHelper,
+  // Same reasoning, for the generic (non-Google-preset) OAuth path -- see McpOAuthDiscovery.kt.
+  val genericOAuthHelper: McpGenericOAuthHelper,
 ) : ViewModel() {
   private val _uiState = MutableStateFlow(McpManagerUiState())
   val uiState = _uiState.asStateFlow()
@@ -468,7 +472,15 @@ constructor(
           )
         }
         resolvedAuth != null && resolvedAuth.authMethodCase == McpAuth.AuthMethodCase.OAUTH -> {
-          val accessToken = resolveGoogleAccessToken(url, resolvedAuth.oauth)
+          // Servers discovered+self-registered via McpOAuthDiscovery.kt have a client_id
+          // persisted; the built-in Google Workspace presets never do (Google doesn't support
+          // DCR), so they keep using the fixed GoogleOAuthConfig endpoints/client ID.
+          val accessToken =
+            if (resolvedAuth.oauth.clientId.isNotEmpty()) {
+              resolveGenericAccessToken(url, resolvedAuth.oauth)
+            } else {
+              resolveGoogleAccessToken(url, resolvedAuth.oauth)
+            }
           StreamableHttpClientTransport(
             client = httpClient,
             url = url,
@@ -539,6 +551,52 @@ constructor(
     }
     return refreshed.accessToken
   }
+
+  /**
+   * Same purpose as [resolveGoogleAccessToken], for a server discovered+self-registered via
+   * McpOAuthDiscovery.kt (has [McpAuth.OAuth.getClientId] set). Unlike Google, a generic
+   * provider isn't guaranteed to have given us a refresh token or a real expiry (see
+   * McpGenericOAuthHelper.handleAuthResult's doc comment) -- expires_at_ms of 0 always fails the
+   * freshness check below and forces a refresh attempt, which then throws its own clear error if
+   * there's no refresh token to use, rather than silently reusing a token that might be dead.
+   */
+  private suspend fun resolveGenericAccessToken(url: String, oauth: McpAuth.OAuth): String {
+    val bufferMs = 5 * 60 * 1000L
+    if (oauth.expiresAtMs > 0 && System.currentTimeMillis() < oauth.expiresAtMs - bufferMs) {
+      return oauth.accessToken
+    }
+    if (oauth.refreshToken.isEmpty()) {
+      throw IllegalStateException("Access token expired and no refresh token is available")
+    }
+    val refreshed =
+      genericOAuthHelper.refreshAccessToken(oauth.tokenEndpoint, oauth.clientId, oauth.refreshToken)
+    if (refreshed.status != GoogleOAuthResultType.SUCCEEDED || refreshed.accessToken == null) {
+      throw IllegalStateException(refreshed.errorMessage ?: "Failed to refresh OAuth token")
+    }
+    val updatedOAuth =
+      oauth
+        .toBuilder()
+        .setAccessToken(refreshed.accessToken)
+        .setRefreshToken(refreshed.refreshToken ?: oauth.refreshToken)
+        .setExpiresAtMs(refreshed.expiresAtMs ?: oauth.expiresAtMs)
+        .apply { refreshed.scope?.let { setScope(it) } }
+        .build()
+    userDataDataStore.updateData { currentUserData ->
+      currentUserData
+        .toBuilder()
+        .putMcpAuths(url, McpAuth.newBuilder().setOauth(updatedOAuth).build())
+        .build()
+    }
+    return refreshed.accessToken
+  }
+
+  /**
+   * Runs OAuth discovery for [url] -- for the "arbitrary MCP server" OAuth path in
+   * AddMcpServerFromUrlDialog.kt. Returns null if the server doesn't publish resource/
+   * authorization-server metadata at the well-known locations McpOAuthDiscovery.kt checks.
+   */
+  suspend fun discoverGenericOAuthConfig(url: String): DiscoveredOAuthConfig? =
+    withContext(Dispatchers.IO) { McpOAuthDiscovery.discoverGenericOAuthConfig(httpClient, url) }
 
   private fun persistServers(updatedServers: List<McpServerState>) {
     viewModelScope.launch(Dispatchers.IO) {

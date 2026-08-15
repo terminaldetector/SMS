@@ -96,6 +96,19 @@ message McpAuth {
     int64 expires_at_ms = 3;
     // Space-separated granted scopes -- lets a future re-auth detect scope creep.
     string scope = 4;
+    // Fields 5-8 are only populated for a generically-discovered (RFC 9728 + RFC 8414) and
+    // self-registered (RFC 7591 Dynamic Client Registration) OAuth provider -- i.e. any MCP
+    // server that ISN'T one of the built-in Google Workspace presets. Google's servers don't
+    // support DCR, so their OAuth still goes through the fixed GoogleOAuthConfig endpoints/client
+    // ID and leaves these empty; McpManagerViewModel branches its token-refresh logic on whether
+    // client_id is set. See McpOAuthDiscovery.kt and McpGenericOAuthHelper.kt.
+    string authorization_endpoint = 5;
+    string token_endpoint = 6;
+    string client_id = 7;
+    // Empty for the common case: a public/native client registered with
+    // token_endpoint_auth_method=none (PKCE only, no secret) -- the only kind our DCR request
+    // asks for. Stored anyway in case a server issues one despite that.
+    string client_secret = 8;
   }
 
   oneof auth_method {

@@ -392,12 +392,15 @@
   <string name="mcp_server_authorization" translatable="true">Authorization</string>
   <string name="mcp_server_auth_none" translatable="true">None</string>
   <string name="mcp_server_auth_request_header" translatable="true">Request header</string>
-  <!-- Shown when the typed MCP server URL matches a built-in Google Workspace preset, so OAuth is
-       actually usable. [CHAR_LIMIT=NONE] -->
   <string name="mcp_server_auth_oauth" translatable="true">OAuth</string>
-  <!-- Shown when OAuth isn't usable for the typed URL (not a known Google Workspace preset).
+  <!-- Shown when this app couldn't automatically find OAuth configuration for a non-preset MCP
+       server URL (no RFC 9728/8414 metadata found at the well-known locations checked).
        [CHAR_LIMIT=NONE] -->
-  <string name="mcp_server_auth_oauth_wip" translatable="true">OAuth (WIP)</string>
+  <string name="mcp_server_oauth_discovery_failed" translatable="true">Couldn\'t find OAuth configuration for this server automatically. Try Request header instead if the server supports it.</string>
+  <!-- Shown when a non-preset MCP server's OAuth configuration was found, but the server doesn't
+       support automatic client registration (RFC 7591), so this app has no way to obtain a
+       client ID for it. [CHAR_LIMIT=NONE] -->
+  <string name="mcp_server_oauth_registration_unsupported" translatable="true">This server doesn\'t support automatic OAuth registration. Try Request header instead if the server supports it.</string>
   <string name="mcp_server_header_name" translatable="true">Header name</string>
   <string name="mcp_server_header_value" translatable="true">Header value</string>
 
