@@ -259,34 +259,6 @@ internal object AgentChatTaskModule {
   }
 }
 
-fun injectSkillsAndMcpTools(
-  baseSystemPrompt: String,
-  skills: List<Skill>,
-  toolsPrompt: String,
-  actionsEnabled: Boolean = true,
-  ragEnabled: Boolean = true,
-  mobileActionsEnabled: Boolean = false,
-  // NEW: current RAG index contents, so the model knows what's actually searchable right now
-  // instead of discovering it only by calling ragSearch and getting nothing back. Empty by
-  // default so callers that don't pass it (if any remain) behave exactly as before.
-  ragDocuments: List<RagDocumentInfo> = emptyList(),
-  universalAgentEnabled: Boolean = false,
-  webSearchEnabled: Boolean = true,
-): Contents =
-  Contents.of(
-    compileSkillsAndMcpPrompt(
-      baseSystemPrompt = baseSystemPrompt,
-      skills = skills,
-      toolsPrompt = toolsPrompt,
-      actionsEnabled = actionsEnabled,
-      ragEnabled = ragEnabled,
-      mobileActionsEnabled = mobileActionsEnabled,
-      ragDocuments = ragDocuments,
-      universalAgentEnabled = universalAgentEnabled,
-      webSearchEnabled = webSearchEnabled,
-    )
-  )
-
 /** Raw prompt compiler used by [UnifiedAgentEngine] before it appends capability instructions. */
 fun compileSkillsAndMcpPrompt(
   baseSystemPrompt: String,

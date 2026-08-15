@@ -290,9 +290,17 @@ fun AgentChatScreen(
   var currentUniversalAgentPermissionAction by remember {
     mutableStateOf<AskUniversalAgentActionPermissionAction?>(null)
   }
-  // Both requested (user opted in) AND actually enabled in Settings must be true for the tool to
+  // Requested (user opted in) AND actually enabled in Settings must both be true for the tool to
   // actually be offered to the model — see resetSessionWithCurrentSkillsAndMcps's tools list.
-  val universalAgentEffectivelyEnabled = universalAgentRequested && universalAgentServiceEnabled
+  // Also requires task.id == LLM_AGENT_CHAT: UniversalAgentEnablementState.requested is an
+  // app-wide flag shared with CoderTaskModule's AgentChatScreen instance (which never wires
+  // universalAgentTools), so without this check, enabling Universal Agent once from AI Chat (or
+  // the Home screen card) would leak "Universal Agent: ON" into the Coder task's system prompt
+  // and toggle UI despite no Universal Agent tools actually being registered there.
+  val universalAgentEffectivelyEnabled =
+    universalAgentRequested &&
+      universalAgentServiceEnabled &&
+      task.id === BuiltInTaskId.LLM_AGENT_CHAT
 
   val lifecycleOwner = LocalLifecycleOwner.current
   DisposableEffect(lifecycleOwner) {
@@ -334,7 +342,7 @@ fun AgentChatScreen(
       mobileActionsTools = mobileActionsTools,
       ragDocuments = ragUiState.documents,
       coderTools = coderTools,
-      universalAgentEnabled = universalAgentRequested && universalAgentServiceEnabled,
+      universalAgentEnabled = universalAgentEffectivelyEnabled,
       universalAgentTools = universalAgentTools,
       webSearchEnabled = webSearchEnabled,
     )

@@ -26,7 +26,7 @@ private const val TAG = "AGMATools"
 /**
  * Name+description pairs mirroring [MobileActionsTools]'s 7 `@Tool` methods below, verbatim —
  * kept manually in sync (Kotlin annotations aren't readable at this call site) so the model's
- * unified "available skills" enumeration (see AgentChatTaskModule.kt's injectSkillsAndMcpTools)
+ * unified "available skills" enumeration (see UnifiedAgentEngine.kt's compileInstruction)
  * and the Skills tab's "Device actions" listing (SkillsManagerBottomSheet.kt) both describe these
  * the same way a human sees them below. [MobileActionsTools] is now a compatibility adapter owned
  * by UnifiedAgentEngine, alongside AgentTools; it must not be registered as an independent engine.

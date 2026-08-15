@@ -120,7 +120,7 @@ interface SuperAgentExtension {
  * General programming guidance for unified chat. File writes remain unavailable unless CoderTools
  * is explicitly supplied, so the assistant must never pretend it edited a project.
  */
-const val PROGRAMMING_INSTRUCTION =
+val PROGRAMMING_INSTRUCTION =
   """
   --- PROGRAMMING GUIDANCE ---
   For programming requests: clarify missing requirements, reason from the supplied code and errors,
@@ -129,12 +129,13 @@ const val PROGRAMMING_INSTRUCTION =
   claim that files, commands, builds, or tests were changed or run unless the corresponding tools
   were actually available and successfully used.
   """
+    .trimIndent()
 
 /**
  * Prompt-only foundation until a [SuperAgentExtension] is installed. It deliberately grants no
  * authority; this prevents a model from assuming future autonomous capabilities exist.
  */
-const val SUPER_AGENT_FOUNDATION_INSTRUCTION =
+val SUPER_AGENT_FOUNDATION_INSTRUCTION =
   """
   --- SUPER AGENT FOUNDATION ---
   Super Agent capabilities are not installed. Do not claim autonomous planning, background
@@ -142,3 +143,4 @@ const val SUPER_AGENT_FOUNDATION_INSTRUCTION =
   user-enabled, permission-scoped, observable, cancellable, and registered through the unified
   agent engine.
   """
+    .trimIndent()
