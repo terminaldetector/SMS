@@ -311,6 +311,14 @@ data class Model(
   var accessToken: String? = null,
 
   /**
+   * The backend LiteRT-LM actually initialized with, set once [LlmChatModelHelper.initialize]
+   * succeeds. Distinct from the user's *requested* `ConfigKeys.ACCELERATOR` value — they differ
+   * exactly when the manual NPU->GPU->CPU fallback chain kicked in. Null until the first
+   * successful initialization. In-memory only, like [instance]; not persisted.
+   */
+  var lastActiveAccelerator: String? = null,
+
+  /**
    * Indicates whether the model currently on the device is an older version that can be updated.
    *
    * This field is managed by the app. It is set to true when the app detects that one of the

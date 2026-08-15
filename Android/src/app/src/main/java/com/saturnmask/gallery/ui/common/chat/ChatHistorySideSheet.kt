@@ -30,16 +30,24 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MultiChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -55,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.saturnmask.gallery.R
+import com.saturnmask.gallery.proto.Theme
 
 @Composable
 fun ChatHistorySideSheetContent(
@@ -64,6 +73,8 @@ fun ChatHistorySideSheetContent(
   onHistoryItemsDeleteAll: () -> Unit,
   onNewChatClicked: () -> Unit,
   onDismissed: () -> Unit,
+  currentTheme: Theme = Theme.THEME_AUTO,
+  onThemeSelected: (Theme) -> Unit = {},
 ) {
   var showConfirmDeleteDialog by remember { mutableStateOf(false) }
   var itemToDelete by remember { mutableStateOf<String?>(null) }
@@ -100,6 +111,41 @@ fun ChatHistorySideSheetContent(
         Text(stringResource(R.string.new_chat))
       }
     }
+
+    // Settings section (swipe-in right menu). Theme is live; the rest are groundwork ("Soon").
+    Text(
+      "Settings",
+      style = MaterialTheme.typography.titleSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(bottom = 8.dp),
+    )
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp, horizontal = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Rounded.Palette,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(20.dp),
+      )
+      Text("Theme", style = MaterialTheme.typography.bodyMedium)
+    }
+    val themeOptions = listOf(Theme.THEME_AUTO, Theme.THEME_LIGHT, Theme.THEME_DARK)
+    MultiChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+      themeOptions.forEachIndexed { index, theme ->
+        SegmentedButton(
+          shape = SegmentedButtonDefaults.itemShape(index = index, count = themeOptions.size),
+          checked = theme == currentTheme,
+          onCheckedChange = { onThemeSelected(theme) },
+          label = { Text(themeLabel(theme)) },
+        )
+      }
+    }
+    SettingsStubRow(icon = Icons.Rounded.Notifications, label = "Notifications")
+    SettingsStubRow(icon = Icons.Rounded.Tune, label = "Advanced")
+    Spacer(modifier = Modifier.size(12.dp))
 
     // Subheading Row: Chat history and Clear all button
     Row(
@@ -223,6 +269,46 @@ fun ChatHistorySideSheetContent(
       dismissButton = {
         TextButton(onClick = { itemToDelete = null }) { Text(stringResource(R.string.cancel)) }
       },
+    )
+  }
+}
+
+private fun themeLabel(theme: Theme): String =
+  when (theme) {
+    Theme.THEME_LIGHT -> "Light"
+    Theme.THEME_DARK -> "Dark"
+    else -> "System"
+  }
+
+/**
+ * A single row in the future "Settings" section of the right swipe-in menu. Non-interactive
+ * groundwork for now (marked "Soon"); each row is where an actual settings screen/toggle will be
+ * wired later.
+ */
+@Composable
+private fun SettingsStubRow(icon: ImageVector, label: String) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.size(20.dp),
+    )
+    Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+    Text(
+      "Soon",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+    )
+    Icon(
+      imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+      modifier = Modifier.size(20.dp),
     )
   }
 }

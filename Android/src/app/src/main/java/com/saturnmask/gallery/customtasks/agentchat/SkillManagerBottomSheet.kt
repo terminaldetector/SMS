@@ -626,7 +626,7 @@ fun SkillManagerBottomSheetContent(
                 // Read-only listing (no per-action toggle — governed by the single Mobile
                 // Actions switch elsewhere) so these show up in the same place a human already
                 // looks for "what's available", matching the model's own unified skill
-                // enumeration in AgentChatTaskModule.kt's injectSkillsAndMcpTools.
+                // enumeration in UnifiedAgentEngine.kt's compileInstruction.
                 if (mobileActionsEnabled) {
                   item(key = "device_actions_header") {
                     Row(

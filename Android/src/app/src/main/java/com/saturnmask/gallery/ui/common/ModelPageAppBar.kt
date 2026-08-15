@@ -16,15 +16,17 @@
 
 package com.saturnmask.gallery.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -51,12 +54,16 @@ import com.saturnmask.gallery.customtasks.agentchat.agentSkillTopK
 import com.saturnmask.gallery.customtasks.agentchat.agentSkillTopKAdjusted
 import com.saturnmask.gallery.data.BuiltInTaskId
 import com.saturnmask.gallery.data.ConfigKeys
+import com.saturnmask.gallery.data.DEFAULT_MAX_TOKEN
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.ModelCapability
 import com.saturnmask.gallery.data.ModelDownloadStatusType
 import com.saturnmask.gallery.data.RuntimeType
 import com.saturnmask.gallery.data.Task
+import com.saturnmask.gallery.data.backendHealthStoreFrom
 import com.saturnmask.gallery.data.convertValueToTargetType
+import com.saturnmask.gallery.ui.common.chat.ChatMessage
+import com.saturnmask.gallery.ui.common.chat.toLiteRtMessages
 import com.saturnmask.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.saturnmask.gallery.ui.modelmanager.ModelManagerViewModel
 
@@ -81,6 +88,10 @@ fun ModelPageAppBar(
   onSystemPromptChanged: (String) -> Unit = {},
   shouldShowHistoryButton: Boolean = false,
   onHistoryClicked: (Model) -> Unit = {},
+  // The chat's current visible messages, so a config change that forces reinitialization (e.g.
+  // switching Accelerator) can replay them into the freshly-created engine instead of silently
+  // losing the conversation — see the needReinitialization branch below.
+  getCurrentMessages: () -> List<ChatMessage> = { emptyList() },
 ) {
   var showConfigDialog by remember { mutableStateOf(false) }
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
@@ -126,6 +137,16 @@ fun ModelPageAppBar(
             onModelSelected = onModelSelected,
           )
         }
+
+        // Which backend (CPU/GPU/NPU) the model actually initialized with — can differ from the
+        // user's requested Accelerator config if the NPU->GPU->CPU fallback chain kicked in.
+        // AICore models don't go through LlmChatModelHelper/Backend at all, so this stays null
+        // (and hidden) for them.
+        if (isModelInitialized && model.runtimeType != RuntimeType.AICORE) {
+          model.lastActiveAccelerator?.let { activeAccelerator ->
+            BackendBadge(accelerator = activeAccelerator, modifier = Modifier.padding(top = 2.dp))
+          }
+        }
       }
     },
     modifier = modifier,
@@ -143,18 +164,13 @@ fun ModelPageAppBar(
     actions = {
       val downloadSucceeded = curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
       val showConfigButton = model.configs.isNotEmpty() && downloadSucceeded
-      Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        var configButtonOffset = 0.dp
-        if (showConfigButton && shouldShowHistoryButton) {
-          configButtonOffset = (-40).dp
-        }
+      Row(verticalAlignment = Alignment.CenterVertically) {
         if (showConfigButton) {
           val enableConfigButton = !isModelInitializing && !inProgress && isModelInitialized
           IconButton(
             onClick = { showConfigDialog = true },
             enabled = enableConfigButton,
-            modifier =
-              Modifier.offset(x = configButtonOffset).alpha(if (!enableConfigButton) 0.5f else 1f),
+            modifier = Modifier.alpha(if (!enableConfigButton) 0.5f else 1f),
           ) {
             Icon(
               imageVector = Icons.Rounded.Tune,
@@ -164,19 +180,16 @@ fun ModelPageAppBar(
             )
           }
         }
-        if (downloadSucceeded && shouldShowHistoryButton) {
-          val enableHistoryButton =
-            !isModelInitializing && !modelPreparing && !inProgress && isModelInitialized
-          IconButton(
-            onClick = { onHistoryClicked(model) },
-            enabled = enableHistoryButton,
-            modifier = Modifier.alpha(if (!enableHistoryButton) 0.5f else 1f),
-          ) {
+        // Burger menu (top-right): opens the right side drawer that hosts chat history and the
+        // app settings (theme, etc.). Always available so the theme switch is reachable even
+        // before the model finishes initializing.
+        if (shouldShowHistoryButton) {
+          IconButton(onClick = { onHistoryClicked(model) }) {
             Icon(
-              imageVector = Icons.Rounded.History,
+              imageVector = Icons.Rounded.Menu,
               contentDescription = stringResource(R.string.cd_chat_history),
               tint = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.size(20.dp),
+              modifier = Modifier.size(24.dp),
             )
           }
         }
@@ -251,6 +264,12 @@ fun ModelPageAppBar(
         val oldConfigValues = model.configValues
         model.prevConfigValues = oldConfigValues
         model.configValues = curConfigValues
+        // An explicit re-selection here is the one deliberate way a previously-bad backend gets
+        // another chance — see BackendHealthStore's doc comment. Only clears the mark for the
+        // newly-picked accelerator, not the whole model.
+        (curConfigValues[ConfigKeys.ACCELERATOR.label] as? String)?.let { newAccelerator ->
+          backendHealthStoreFrom(context).clearBad(model.name, newAccelerator)
+        }
         if (task.id == BuiltInTaskId.LLM_AGENT_CHAT) {
           model.agentSkillTopKAdjusted = true
           model.agentSkillTopK = curConfigValues[ConfigKeys.TOPK.label]
@@ -270,6 +289,19 @@ fun ModelPageAppBar(
                   onSystemPromptChanged(newSystemPrompt)
                 }
               },
+              // A forced reinit (e.g. switching Accelerator) always creates a brand-new engine —
+              // replay the current chat into it so the conversation isn't silently forgotten.
+              // maxTokens caps the replay to the model's own configured budget -- see
+              // toLiteRtMessages's doc comment.
+              initialMessages =
+                getCurrentMessages()
+                  .toLiteRtMessages(
+                    maxTokens =
+                      model.getIntConfigValue(
+                        key = ConfigKeys.MAX_TOKENS,
+                        defaultValue = DEFAULT_MAX_TOKEN,
+                      )
+                  ),
             )
           }
 
@@ -282,6 +314,20 @@ fun ModelPageAppBar(
         allowEditingSystemPrompt && model.runtimeType != RuntimeType.AICORE,
       defaultSystemPrompt = task.defaultSystemPrompt,
       curSystemPrompt = curSystemPrompt,
+    )
+  }
+}
+
+@Composable
+private fun BackendBadge(accelerator: String, modifier: Modifier = Modifier) {
+  Box(
+    modifier = modifier.clip(CircleShape).background(MaterialTheme.colorScheme.tertiaryContainer)
+  ) {
+    Text(
+      stringResource(R.string.model_page_active_backend, accelerator),
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onTertiaryContainer,
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
     )
   }
 }

@@ -73,6 +73,7 @@ object AICoreModelHelper : LlmModelHelper {
     tools: List<ToolProvider>,
     enableConversationConstrainedDecoding: Boolean,
     coroutineScope: CoroutineScope?,
+    initialMessages: List<Message>,
   ) {
     // AICore model helper requires a coroutine scope
     if (coroutineScope == null) {
@@ -82,6 +83,15 @@ object AICoreModelHelper : LlmModelHelper {
     }
     val generativeModel = getGenerativeModel(model)
 
+    fun newInstance() =
+      AICoreModelInstance(generativeModel).also { instance ->
+        for (msg in initialMessages) {
+          instance.chatHistory.add(
+            AICoreChatMessage(isUser = (msg.role == Role.USER), text = msg.contents.toString())
+          )
+        }
+      }
+
     coroutineScope.launch {
       try {
         val status = generativeModel.checkStatus()
@@ -89,7 +99,7 @@ object AICoreModelHelper : LlmModelHelper {
           FeatureStatus.AVAILABLE -> {
             generativeModel.warmup()
             updateTokenLimit(model, generativeModel)
-            model.instance = AICoreModelInstance(generativeModel)
+            model.instance = newInstance()
             onDone("Feature is available")
           }
           FeatureStatus.DOWNLOADABLE,
@@ -108,7 +118,7 @@ object AICoreModelHelper : LlmModelHelper {
                 is DownloadStatus.DownloadCompleted -> {
                   generativeModel.warmup()
                   updateTokenLimit(model, generativeModel)
-                  model.instance = AICoreModelInstance(generativeModel)
+                  model.instance = newInstance()
                   onDone("Download completed")
                 }
               }

@@ -17,6 +17,7 @@
 package com.saturnmask.gallery.domain.rag
 
 import android.content.Context
+import com.saturnmask.gallery.data.Accelerator
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,6 +27,7 @@ private const val KEY_SELECTED_SOURCE = "selected_source"
 private const val KEY_CUSTOM_MODEL_PATH = "custom_model_path"
 private const val KEY_CUSTOM_TOKENIZER_PATH = "custom_tokenizer_path"
 private const val KEY_CUSTOM_DIMENSION = "custom_dimension"
+private const val KEY_ACCELERATOR = "accelerator"
 private const val DEFAULT_CUSTOM_DIMENSION = 768
 
 /** Which [TextEmbedder] backs RAG search: the built-in EmbeddingGemma download, or a user-supplied
@@ -61,6 +63,16 @@ class EmbedderSettingsStore @Inject constructor(@ApplicationContext context: Con
   fun getCustomTokenizerPath(): String? = prefs.getString(KEY_CUSTOM_TOKENIZER_PATH, null)
 
   fun getCustomDimension(): Int = prefs.getInt(KEY_CUSTOM_DIMENSION, DEFAULT_CUSTOM_DIMENSION)
+
+  // GPU is the only alternative offered — there's no NPU delegate in the Play Services TFLite GPU
+  // API this embedder uses, so CPU/GPU are the only two real choices.
+  fun getAccelerator(): Accelerator =
+    runCatching { Accelerator.valueOf(prefs.getString(KEY_ACCELERATOR, Accelerator.CPU.name)!!) }
+      .getOrDefault(Accelerator.CPU)
+
+  fun setAccelerator(accelerator: Accelerator) {
+    prefs.edit().putString(KEY_ACCELERATOR, accelerator.name).apply()
+  }
 
   fun setCustomEmbedderFiles(modelPath: String, tokenizerPath: String, dimension: Int) {
     prefs

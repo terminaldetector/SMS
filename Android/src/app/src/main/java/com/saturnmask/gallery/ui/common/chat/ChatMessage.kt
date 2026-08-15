@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.Dp
 import com.saturnmask.gallery.common.Classification
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.PromptTemplate
+import com.google.ai.edge.litertlm.Message
 
 private const val TAG = "AGChatMessage"
 
@@ -436,3 +437,59 @@ class ChatMessageThinking(
     )
   }
 }
+
+// Rough, conservative approximation only -- no real tokenizer is available at this layer for the
+// main chat model (unlike the RAG embedder's HuggingFace tokenizer, which is a different vocab
+// entirely). ~4 characters/token is a common English-text heuristic; for scripts that tokenize
+// less efficiently than that (e.g. Cyrillic, CJK) this undercounts tokens and so trims more
+// aggressively than strictly necessary -- the safer direction to be wrong in, since the actual
+// failure mode being guarded against (handing the native engine more history than its configured
+// budget) is worse than trimming a bit early. Unverified against a real tokenizer this session.
+private const val CHARS_PER_TOKEN_ESTIMATE = 4
+
+// Reserve headroom for the system prompt and the model's own response -- replaying history right
+// up to the configured token budget would leave no room for the model to actually answer.
+private const val RESPONSE_HEADROOM_TOKENS = 1024
+
+/**
+ * Converts visible chat bubbles into the litertlm engine's replay format, for reseeding a
+ * conversation's memory across a session reset (see `LlmModelHelper.initialize`/
+ * `resetConversation`'s `initialMessages` parameter). Only [ChatMessageText] entries carry real
+ * conversational content — info/warning/error/progress-panel/etc. messages are UI-only and have no
+ * engine-side equivalent, so they're silently dropped rather than replayed.
+ *
+ * When [maxTokens] is provided (the model's configured `ConfigKeys.MAX_TOKENS` budget), the OLDEST
+ * messages are dropped first -- keeping the most recent ones, which matter most for continuity --
+ * until the estimated total fits within [maxTokens] minus [RESPONSE_HEADROOM_TOKENS]. This is a
+ * safety net against ever handing the native engine a full-history replay larger than its own
+ * context budget: nothing today counts tokens turn-by-turn during a live, never-reset conversation
+ * (the engine's own internal state just grows unchecked there), so this only protects the
+ * reset/reinit path (accelerator switches, resuming a session) — it does not cap an ongoing,
+ * never-reinitialized conversation's live growth.
+ */
+fun List<ChatMessage>.toLiteRtMessages(maxTokens: Int? = null): List<Message> {
+  val textMessages =
+    mapNotNull { chatMessage ->
+      if (chatMessage is ChatMessageText) chatMessage else null
+    }
+  if (maxTokens == null) {
+    return textMessages.map { it.toLiteRtMessage() }
+  }
+  val budgetChars =
+    (maxTokens - RESPONSE_HEADROOM_TOKENS).coerceAtLeast(0) * CHARS_PER_TOKEN_ESTIMATE
+  var runningChars = 0
+  val kept = ArrayDeque<ChatMessageText>()
+  for (chatMessage in textMessages.asReversed()) {
+    val len = chatMessage.content.length
+    // Always keep at least the single most recent message, even if it alone exceeds the budget --
+    // dropping everything would silently erase the whole conversation, which is worse than handing
+    // the engine one oversized replay it can reject/trim on its own terms.
+    if (runningChars + len > budgetChars && kept.isNotEmpty()) break
+    kept.addFirst(chatMessage)
+    runningChars += len
+  }
+  return kept.map { it.toLiteRtMessage() }
+}
+
+private fun ChatMessageText.toLiteRtMessage(): Message =
+  if (side == ChatSide.USER) Message.user(content) else Message.model(content)

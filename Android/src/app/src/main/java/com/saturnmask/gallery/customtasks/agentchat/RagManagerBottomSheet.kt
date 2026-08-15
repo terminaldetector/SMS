@@ -20,6 +20,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,9 +61,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.saturnmask.gallery.data.Accelerator
 import com.saturnmask.gallery.data.ModelDownloadStatusType
 import com.saturnmask.gallery.domain.rag.EmbedderSource
 import com.saturnmask.gallery.domain.rag.RagDocumentInfo
+import com.saturnmask.gallery.domain.rag.RagDocumentPriority
 import com.saturnmask.gallery.domain.rag.RagMode
 
 /**
@@ -129,6 +132,24 @@ fun RagManagerBottomSheet(
           selected = uiState.embedderSource == EmbedderSource.CUSTOM,
           onClick = { viewModel.useCustomEmbedder() },
           label = { Text("Custom") },
+        )
+      }
+      Text(
+        text = "Embedder runs on:",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+        FilterChip(
+          selected = uiState.embedderAccelerator == Accelerator.CPU,
+          onClick = { viewModel.setEmbedderAccelerator(Accelerator.CPU) },
+          label = { Text("CPU") },
+        )
+        FilterChip(
+          selected = uiState.embedderAccelerator == Accelerator.GPU,
+          onClick = { viewModel.setEmbedderAccelerator(Accelerator.GPU) },
+          label = { Text("GPU") },
         )
       }
       if (uiState.embedderSource == EmbedderSource.BUILT_IN) {
@@ -202,7 +223,11 @@ fun RagManagerBottomSheet(
       } else {
         LazyColumn {
           items(uiState.documents, key = { it.id }) { doc ->
-            RagDocumentRow(doc = doc, onRemove = { viewModel.removeDocument(doc.id) })
+            RagDocumentRow(
+              doc = doc,
+              onRemove = { viewModel.removeDocument(doc.id) },
+              onPriorityChanged = { priority -> viewModel.setDocumentPriority(doc.id, priority) },
+            )
           }
         }
       }
@@ -430,7 +455,11 @@ private fun CustomEmbedderSection(
 }
 
 @Composable
-private fun RagDocumentRow(doc: RagDocumentInfo, onRemove: () -> Unit) {
+private fun RagDocumentRow(
+  doc: RagDocumentInfo,
+  onRemove: () -> Unit,
+  onPriorityChanged: (RagDocumentPriority) -> Unit,
+) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
     horizontalArrangement = Arrangement.SpaceBetween,
@@ -447,6 +476,34 @@ private fun RagDocumentRow(doc: RagDocumentInfo, onRemove: () -> Unit) {
             text = if (doc.scope == RagMode.DYNAMIC) "This chat" else "Static",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+          )
+        }
+        // Tap to cycle LOW -> NORMAL -> HIGH -> LOW. Manual priority setting — see
+        // RagDocumentPriority's doc comment for how this combines with the automatic signals.
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = MaterialTheme.colorScheme.tertiaryContainer,
+          modifier =
+            Modifier.clickable {
+              onPriorityChanged(
+                when (doc.priority) {
+                  RagDocumentPriority.LOW -> RagDocumentPriority.NORMAL
+                  RagDocumentPriority.NORMAL -> RagDocumentPriority.HIGH
+                  RagDocumentPriority.HIGH -> RagDocumentPriority.LOW
+                }
+              )
+            },
+        ) {
+          Text(
+            text =
+              when (doc.priority) {
+                RagDocumentPriority.LOW -> "Priority: Low"
+                RagDocumentPriority.NORMAL -> "Priority: Normal"
+                RagDocumentPriority.HIGH -> "Priority: High"
+              },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
           )
         }

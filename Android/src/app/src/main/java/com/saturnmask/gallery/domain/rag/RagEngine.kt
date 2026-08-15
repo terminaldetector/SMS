@@ -30,6 +30,20 @@ enum class RagMode {
 }
 
 /**
+ * How strongly a document's chunks should be favored in [RagEngine.search], on top of raw cosine
+ * similarity. Settable manually (see [RagEngine.setDocumentPriority]) and set automatically —
+ * documents attached as [RagMode.DYNAMIC] default to [HIGH] (the user just explicitly attached it
+ * to this conversation, so it's clearly relevant right now), [RagMode.STATIC] library documents
+ * default to [NORMAL]. [RagEngineImpl.search] also applies a small, capped automatic boost based
+ * on how often a document's chunks have actually been retrieved before, independent of this field.
+ */
+enum class RagDocumentPriority {
+  LOW,
+  NORMAL,
+  HIGH,
+}
+
+/**
  * Local, on-device RAG (retrieval-augmented generation) engine.
  *
  * Static documents are persisted to app-private storage (`filesDir/rag_index.json`) so they
@@ -68,6 +82,12 @@ interface RagEngine {
   suspend fun clear()
 
   /**
+   * Manually sets [documentId]'s priority (see [RagDocumentPriority]) — works whether the document
+   * is static or dynamic; a no-op if no document with that id exists.
+   */
+  suspend fun setDocumentPriority(documentId: String, priority: RagDocumentPriority)
+
+  /**
    * Lists indexed documents (without their chunk contents, just metadata): static documents
    * always, plus [sessionId]'s dynamic documents if non-null.
    */
@@ -96,6 +116,8 @@ data class RagDocumentInfo(
   val previewText: String,
   /** [RagMode.STATIC] (persisted, shared) or [RagMode.DYNAMIC] (this chat session only). */
   val scope: RagMode = RagMode.STATIC,
+  /** See [RagDocumentPriority]. */
+  val priority: RagDocumentPriority = RagDocumentPriority.NORMAL,
 )
 
 data class RagSearchResult(

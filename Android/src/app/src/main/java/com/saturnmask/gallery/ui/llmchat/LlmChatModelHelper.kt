@@ -20,7 +20,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.saturnmask.gallery.common.cleanUpMediapipeTaskErrorMessage
+import com.saturnmask.gallery.common.validateModelFileOrNull
 import com.saturnmask.gallery.data.Accelerator
+import com.saturnmask.gallery.data.backendHealthStoreFrom
 import com.saturnmask.gallery.data.ConfigKeys
 import com.saturnmask.gallery.data.DEFAULT_MAX_TOKEN
 import com.saturnmask.gallery.data.DEFAULT_TEMPERATURE
@@ -53,6 +55,12 @@ import kotlinx.coroutines.CoroutineScope
 
 private const val TAG = "AGLlmChatModelHelper"
 
+// Internal-only marker prefix: distinguishes "the fallback-exhausted engine-creation failure" from
+// any other exception thrown inside initialize()'s outer try, so the outer catch can surface a
+// clearer "this model appears incompatible" message instead of a generic one. Never shown to the
+// user as-is — always stripped off first.
+private const val MODEL_INCOMPATIBLE_MARKER = "MODEL_INCOMPATIBLE: "
+
 data class LlmModelInstance(val engine: Engine, var conversation: Conversation)
 
 object LlmChatModelHelper : LlmModelHelper {
@@ -71,6 +79,7 @@ object LlmChatModelHelper : LlmModelHelper {
     tools: List<ToolProvider>,
     enableConversationConstrainedDecoding: Boolean,
     coroutineScope: CoroutineScope?,
+    initialMessages: List<Message>,
   ) {
     // Prepare options.
     val maxTokens =
@@ -104,19 +113,53 @@ object LlmChatModelHelper : LlmModelHelper {
     // (declared support in the allowlist/import metadata is a claim, not a guarantee).
     var shouldEnableImage = supportImage
     var shouldEnableAudio = supportAudio
-    val preferredBackend =
-      when (accelerator) {
-        Accelerator.CPU.label -> Backend.CPU(numOfThreads = numThreads)
-        Accelerator.GPU.label -> Backend.GPU()
-        Accelerator.NPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        Accelerator.TPU.label ->
-          Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
-        else -> Backend.CPU(numOfThreads = numThreads)
+
+    fun backendFor(acc: Accelerator): Backend =
+      when (acc) {
+        Accelerator.CPU -> Backend.CPU(numOfThreads = numThreads)
+        Accelerator.GPU -> Backend.GPU()
+        Accelerator.NPU,
+        Accelerator.TPU -> Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
       }
-    Log.d(TAG, "Preferred backend: $preferredBackend")
+    val requestedAccelerator =
+      Accelerator.values().firstOrNull { it.label == accelerator } ?: Accelerator.CPU
+    // Manual NPU->GPU->CPU fallback: LiteRT-LM's Backend.GPU()/Backend.NPU() have no automatic
+    // cross-backend fallback of their own (see e.g. google-ai-edge/LiteRT-LM#2114 — a GPU compiler
+    // crash on some devices surfaces straight to the user with no retry). model.accelerators is
+    // already the correct, per-device-adjusted list of backends this model supports (Pixel's
+    // NPU->TPU rename and Pixel 10's GPU removal are baked in via ModelAllowlist.kt), so the
+    // fallback only tries backends this model actually declares, with CPU always guaranteed as the
+    // unconditional last resort (LiteRT-LM's CPU backend runs any model file, just slower). The
+    // user's requested backend is always tried first — never silently overridden.
+    val backendPriority = listOf(Accelerator.NPU, Accelerator.TPU, Accelerator.GPU, Accelerator.CPU)
+    val healthStore = backendHealthStoreFrom(context)
+    // Skip any backend this device already knows is broken for this model — either it failed
+    // outright last time (isKnownBad), or the process died mid-attempt last time without ever
+    // reaching markAttemptSucceeded (hadUnclearedAttempt — the one signal that can survive a true
+    // native crash, which no Kotlin try/catch here could ever detect on the run where it happens).
+    // CPU is exempt: it has no compiled/native delegate to fail this way, so it always stays
+    // available as the unconditional last resort.
+    fun isHealthy(acc: Accelerator) =
+      acc == Accelerator.CPU ||
+        (!healthStore.isKnownBad(model.name, acc.label) &&
+          !healthStore.hadUnclearedAttempt(model.name, acc.label))
+    val fallbackOrder =
+      (listOf(requestedAccelerator) + backendPriority.filter { it in model.accelerators })
+        .distinct()
+        .filter { isHealthy(it) }
+        .let { if (Accelerator.CPU in it) it else it + Accelerator.CPU }
+    var backendIndex = 0
+    var preferredBackend = backendFor(fallbackOrder[backendIndex])
+    Log.d(TAG, "Preferred backend: $preferredBackend (fallback order: $fallbackOrder)")
 
     val modelPath = model.getPath(context = context)
+    // Conservative check only (file existence/size/extension) — pre-empts the obviously-wrong
+    // case before ever touching native code. Not a substitute for real format/op-set/quantization
+    // validation, which would need a bundled flatbuffer schema parser; see validateModelFileOrNull.
+    validateModelFileOrNull(modelPath)?.let { reason ->
+      onDone("This model appears incompatible: $reason")
+      return
+    }
     fun buildEngineConfig() =
       EngineConfig(
         modelPath = modelPath,
@@ -141,6 +184,56 @@ object LlmChatModelHelper : LlmModelHelper {
     } catch (e: Exception) {
       // Ignore exceptions and assume not supported.
     }
+    // No public API tells us up front whether a .task/.litertlm file actually has a vision or
+    // audio encoder built in (litertlm's Capabilities class only exposes speculative-decoding
+    // support) — the only signal is engine creation itself failing with a NOT_FOUND error
+    // naming the missing encoder. So: try with what was declared, and if that specific failure
+    // shows up, drop that one modality and retry rather than surfacing a hard crash. At most
+    // two modality retries (one per modality) plus at most fallbackOrder.size-1 backend
+    // fallbacks, so this can't loop forever on an unrelated failure.
+    //
+    // Isolated into its own function, called from its own try/catch below, separate from
+    // conversation creation and capability-override persistence — so a load failure that
+    // surfaces as a catchable JVM exception here gets a distinct "this model appears
+    // incompatible" message instead of being lumped in with unrelated failures. This does NOT
+    // protect against a true native SIGSEGV, which still kills the process before any Kotlin
+    // catch here can run — same hard limit BackendHealthStore's own doc comment states for the
+    // GPU/NPU crash case. It only improves the catchable-exception case.
+    fun createEngineWithFallback(): Engine {
+      while (true) {
+        healthStore.markAttemptStarted(model.name, fallbackOrder[backendIndex].label)
+        try {
+          val engine = Engine(buildEngineConfig())
+          engine.initialize()
+          healthStore.markAttemptSucceeded(model.name, fallbackOrder[backendIndex].label)
+          return engine
+        } catch (e: Exception) {
+          val message = e.message ?: ""
+          if (shouldEnableImage && message.contains("VISION_ENCODER", ignoreCase = true)) {
+            Log.w(TAG, "Model '${model.name}' has no vision encoder; retrying without image support.")
+            shouldEnableImage = false
+          } else if (shouldEnableAudio && message.contains("AUDIO_ENCODER", ignoreCase = true)) {
+            Log.w(TAG, "Model '${model.name}' has no audio encoder; retrying without audio support.")
+            shouldEnableAudio = false
+          } else if (backendIndex < fallbackOrder.lastIndex) {
+            Log.w(
+              TAG,
+              "Backend ${fallbackOrder[backendIndex]} failed to initialize for model " +
+                "'${model.name}' (${e.message}); falling back to ${fallbackOrder[backendIndex + 1]}.",
+            )
+            healthStore.markBad(model.name, fallbackOrder[backendIndex].label)
+            backendIndex++
+            preferredBackend = backendFor(fallbackOrder[backendIndex])
+          } else {
+            throw Exception(
+              MODEL_INCOMPATIBLE_MARKER +
+                cleanUpMediapipeTaskErrorMessage(e.message ?: "Unknown error")
+            )
+          }
+        }
+      }
+    }
+
     // Create an instance of LiteRT LM engine and conversation.
     try {
       var speculativeDecoding = false
@@ -160,31 +253,8 @@ object LlmChatModelHelper : LlmModelHelper {
       ExperimentalFlags.enableSpeculativeDecoding = speculativeDecoding
       Log.d(TAG, "Speculative decoding enabled: $speculativeDecoding")
 
-      // No public API tells us up front whether a .task/.litertlm file actually has a vision or
-      // audio encoder built in (litertlm's Capabilities class only exposes speculative-decoding
-      // support) — the only signal is engine creation itself failing with a NOT_FOUND error
-      // naming the missing encoder. So: try with what was declared, and if that specific failure
-      // shows up, drop that one modality and retry rather than surfacing a hard crash. At most
-      // two retries (one per modality), so this can't loop forever on an unrelated failure.
-      lateinit var engine: Engine
-      while (true) {
-        try {
-          engine = Engine(buildEngineConfig())
-          engine.initialize()
-          break
-        } catch (e: Exception) {
-          val message = e.message ?: ""
-          if (shouldEnableImage && message.contains("VISION_ENCODER", ignoreCase = true)) {
-            Log.w(TAG, "Model '${model.name}' has no vision encoder; retrying without image support.")
-            shouldEnableImage = false
-          } else if (shouldEnableAudio && message.contains("AUDIO_ENCODER", ignoreCase = true)) {
-            Log.w(TAG, "Model '${model.name}' has no audio encoder; retrying without audio support.")
-            shouldEnableAudio = false
-          } else {
-            throw e
-          }
-        }
-      }
+      val engine = createEngineWithFallback()
+      model.lastActiveAccelerator = fallbackOrder[backendIndex].label
       // Correct the in-memory Model (so the UI's attach-image/attach-audio buttons stop offering
       // a modality this model can't do, this session) and persist it via ModelCapabilityOverrideStore
       // so later app launches start from the known-true value instead of repeating this same
@@ -212,12 +282,18 @@ object LlmChatModelHelper : LlmModelHelper {
               },
             systemInstruction = systemInstruction,
             tools = tools,
+            initialMessages = initialMessages,
           )
         )
       ExperimentalFlags.enableConversationConstrainedDecoding = false
       model.instance = LlmModelInstance(engine = engine, conversation = conversation)
     } catch (e: Exception) {
-      onDone(cleanUpMediapipeTaskErrorMessage(e.message ?: "Unknown error"))
+      val message = e.message ?: "Unknown error"
+      if (message.startsWith(MODEL_INCOMPATIBLE_MARKER)) {
+        onDone("This model appears incompatible: ${message.removePrefix(MODEL_INCOMPATIBLE_MARKER)}")
+      } else {
+        onDone(cleanUpMediapipeTaskErrorMessage(message))
+      }
       return
     }
     onDone("")
@@ -254,13 +330,19 @@ object LlmChatModelHelper : LlmModelHelper {
           key = ConfigKeys.ACCELERATOR,
           defaultValue = Accelerator.GPU.label,
         )
+      // Use the backend the engine was actually created with, not the requested config value —
+      // they can disagree once the NPU->GPU->CPU fallback chain in initialize() has kicked in.
+      val effectiveAccelerator = model.lastActiveAccelerator ?: accelerator
       ExperimentalFlags.enableConversationConstrainedDecoding =
         enableConversationConstrainedDecoding
       val newConversation =
         engine.createConversation(
           ConversationConfig(
             samplerConfig =
-              if (accelerator == Accelerator.NPU.label || accelerator == Accelerator.TPU.label) {
+              if (
+                effectiveAccelerator == Accelerator.NPU.label ||
+                  effectiveAccelerator == Accelerator.TPU.label
+              ) {
                 null
               } else {
                 SamplerConfig(
@@ -315,7 +397,18 @@ object LlmChatModelHelper : LlmModelHelper {
 
   override fun stopResponse(model: Model) {
     val instance = model.instance as? LlmModelInstance ?: return
-    instance.conversation.cancelProcess()
+    try {
+      instance.conversation.cancelProcess()
+    } catch (e: Exception) {
+      // Confirmed real crash (CrashLogger capture from a real device, 2026-07-31):
+      // IllegalStateException "Conversation is not alive" from Conversation.cancelProcess(),
+      // uncaught, took the whole app down. stopResponse() is called unconditionally by
+      // resetSession() every time (regardless of whether anything is actually in-flight) and by
+      // the inactivity watchdog on timeout -- both are "stop it if it's running" best-effort calls,
+      // so a conversation that's already finished/torn down (nothing to cancel) is an expected,
+      // benign state here, not a real error.
+      Log.d(TAG, "stopResponse: nothing to cancel (${e.message})")
+    }
   }
 
   override fun runInference(

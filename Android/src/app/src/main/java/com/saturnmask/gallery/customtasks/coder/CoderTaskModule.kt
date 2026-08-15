@@ -23,6 +23,8 @@ import androidx.compose.runtime.Composable
 import com.saturnmask.gallery.customtasks.agentchat.AgentTools
 import com.saturnmask.gallery.customtasks.agentchat.AgentToolsImpl
 import com.saturnmask.gallery.customtasks.agentchat.AgentChatScreen
+import com.saturnmask.gallery.customtasks.agentchat.UnifiedAgentConfiguration
+import com.saturnmask.gallery.customtasks.agentchat.UnifiedAgentEngine
 import com.saturnmask.gallery.customtasks.common.CustomTask
 import com.saturnmask.gallery.customtasks.common.CustomTaskDataForBuiltinTask
 import com.saturnmask.gallery.data.BuiltInTaskId
@@ -31,7 +33,7 @@ import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.Task
 import com.saturnmask.gallery.ui.llmchat.LlmChatModelHelper
 import com.google.ai.edge.litertlm.Contents
-import com.google.ai.edge.litertlm.tool
+import com.google.ai.edge.litertlm.Message
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -93,10 +95,40 @@ class CoderTask @Inject constructor() : CustomTask {
     model: Model,
     systemInstruction: Contents?,
     onDone: (String) -> Unit,
+    initialMessages: List<Message>,
   ) {
     val initialSystemPrompt = systemInstruction?.toString() ?: task.defaultSystemPrompt
     coroutineScope.launch(Dispatchers.Default) {
       val hasProject = coderSettingsStoreFrom(context).getProjectRootUri() != null
+
+      // Was hand-assembled here independently of UnifiedAgentEngine (the live-reset path already
+      // used it via resetSessionWithCurrentSkillsAndMcps) -- meaning cold start never loaded
+      // skills/MCP state or included them in the prompt, unlike every other path. Mirrors
+      // AgentChatTaskModule's own cold-init use of the engine.
+      val skillsJob = launch { agentTools.skillManagerViewModel.loadSkills() }
+      val mcpJob = launch { agentTools.mcpManagerViewModel.loadMcpServers() }
+      skillsJob.join()
+      mcpJob.join()
+      val toolsPrompt = agentTools.mcpManagerViewModel.getToolsPrompt()
+
+      // coderTools is only handed to the engine when a project is actually selected, preserving
+      // the previous listOfNotNull(...) behavior -- UnifiedAgentEngine otherwise registers it
+      // unconditionally whenever programmingEnabled is true.
+      val unifiedAgentEngine =
+        UnifiedAgentEngine(
+          agentTools = agentTools,
+          coderTools = if (hasProject) coderTools else null,
+        )
+      val engineConfiguration = UnifiedAgentConfiguration(programmingEnabled = true)
+      val finalSystemInstruction =
+        unifiedAgentEngine.compileInstruction(
+          baseSystemPrompt = initialSystemPrompt,
+          skills = agentTools.skillManagerViewModel.getSelectedSkills(),
+          toolsPrompt = toolsPrompt,
+          ragDocuments = emptyList(),
+          configuration = engineConfiguration,
+        )
+
       LlmChatModelHelper.initialize(
         context = context,
         model = model,
@@ -105,9 +137,10 @@ class CoderTask @Inject constructor() : CustomTask {
         supportImage = model.llmSupportImage,
         supportAudio = model.llmSupportAudio,
         onDone = onDone,
-        systemInstruction = Contents.of(initialSystemPrompt),
-        tools = listOfNotNull(tool(agentTools), if (hasProject) tool(coderTools) else null),
+        systemInstruction = finalSystemInstruction,
+        tools = unifiedAgentEngine.toolProviders(engineConfiguration),
         enableConversationConstrainedDecoding = false,
+        initialMessages = initialMessages,
       )
     }
   }

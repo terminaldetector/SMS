@@ -35,8 +35,8 @@
         "llm_ask_audio"
       ],
       "capabilityToTaskTypes": {
-        "llm_thinking": ["llm_chat", "llm_ask_image", "llm_ask_audio"],
-        "speculative_decoding": ["llm_chat", "llm_ask_image", "llm_ask_audio", "llm_prompt_lab"]
+        "llm_thinking": ["llm_chat", "llm_agent_chat", "llm_ask_image", "llm_ask_audio"],
+        "speculative_decoding": ["llm_chat", "llm_agent_chat", "llm_ask_image", "llm_ask_audio", "llm_prompt_lab"]
       },
       "updatableModelFiles": [
         {
@@ -81,8 +81,8 @@
         "llm_ask_audio"
       ],
       "capabilityToTaskTypes": {
-        "llm_thinking": ["llm_chat", "llm_ask_image", "llm_ask_audio"],
-        "speculative_decoding": ["llm_chat", "llm_ask_image", "llm_ask_audio", "llm_prompt_lab"]
+        "llm_thinking": ["llm_chat", "llm_agent_chat", "llm_ask_image", "llm_ask_audio"],
+        "speculative_decoding": ["llm_chat", "llm_agent_chat", "llm_ask_image", "llm_ask_audio", "llm_prompt_lab"]
       },
       "updatableModelFiles": [
         {

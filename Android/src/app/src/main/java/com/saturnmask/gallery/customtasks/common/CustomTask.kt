@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import com.saturnmask.gallery.data.Model
 import com.saturnmask.gallery.data.Task
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Message
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -77,6 +78,8 @@ interface CustomTask {
    *   no system instruction is needed.
    * @param onDone A callback function to be invoked when initialization is complete. Pass an empty
    *   string on success, or an error message on failure.
+   * @param initialMessages prior conversation turns to replay into the freshly-created engine, so
+   *   a forced reinitialization (e.g. switching Accelerator) doesn't silently forget the chat.
    */
   fun initializeModelFn(
     context: Context,
@@ -84,6 +87,7 @@ interface CustomTask {
     model: Model,
     systemInstruction: Contents?,
     onDone: (error: String) -> Unit,
+    initialMessages: List<Message> = listOf(),
   )
 
   /**

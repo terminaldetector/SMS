@@ -124,7 +124,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.saturnmask.gallery.R
 import com.saturnmask.gallery.common.AudioClip
-import com.saturnmask.gallery.common.convertWavToMonoWithMaxSeconds
+import com.saturnmask.gallery.common.convertAudioToMonoWithMaxSeconds
 import com.saturnmask.gallery.common.decodeSampledBitmapFromUri
 import com.saturnmask.gallery.common.rotateBitmap
 import com.saturnmask.gallery.data.MAX_AUDIO_CLIP_COUNT
@@ -158,7 +158,6 @@ fun MessageInputText(
   isResettingSession: Boolean,
   inProgress: Boolean,
   imageCount: Int,
-  audioClipMessageCount: Int,
   modelInitializing: Boolean,
   @StringRes textFieldPlaceHolderRes: Int,
   onValueChanged: (String) -> Unit,
@@ -223,7 +222,11 @@ fun MessageInputText(
   }
 
   val updatePickedAudioClips: (List<AudioClip>) -> Unit = { audioDataList ->
-    val maxAllowedForThisMessage = (MAX_AUDIO_CLIP_COUNT - audioClipMessageCount).coerceAtLeast(0)
+    // MAX_AUDIO_CLIP_COUNT caps how many clips can be staged for the NEXT outgoing message, not a
+    // running total across the whole chat -- a per-conversation cumulative count would (and did)
+    // permanently lock out audio attachments after the first message that included one, since
+    // nothing about sending/receiving a message ever decreases a lifetime total.
+    val maxAllowedForThisMessage = MAX_AUDIO_CLIP_COUNT
 
     val combinedSize = pickedAudioClips.size + audioDataList.size
     val withinLimit = combinedSize <= maxAllowedForThisMessage
@@ -289,9 +292,9 @@ fun MessageInputText(
     ) { result ->
       if (result.resultCode == android.app.Activity.RESULT_OK) {
         result.data?.data?.let { uri ->
-          Log.d(TAG, "Picked wav file: $uri")
+          Log.d(TAG, "Picked audio file: $uri")
           scope.launch(Dispatchers.IO) {
-            handleAudioWavSelected(
+            handleAudioFileSelected(
               context = context,
               uri = uri,
               onAudioSelected = { audioClip ->
@@ -305,7 +308,7 @@ fun MessageInputText(
           }
         }
       } else {
-        Log.d(TAG, "Wav picking cancelled.")
+        Log.d(TAG, "Audio picking cancelled.")
       }
     }
 
@@ -554,7 +557,7 @@ fun MessageInputText(
                       // Audio related menu items.
                       if (showAudioPicker) {
                         val enableRecordAudioClipMenuItems =
-                          (audioClipMessageCount + pickedAudioClips.size) < MAX_AUDIO_CLIP_COUNT
+                          pickedAudioClips.size < MAX_AUDIO_CLIP_COUNT
                         val isAudioSupported = modelManagerUiState.selectedModel.llmSupportAudio
                         val audioItemColors =
                           MenuDefaults.itemColors(
@@ -610,7 +613,7 @@ fun MessageInputText(
                               horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                               Icon(Icons.Rounded.AudioFile, contentDescription = null)
-                              Text("Pick wav file")
+                              Text("Pick audio file")
                             }
                           },
                           enabled = enableRecordAudioClipMenuItems,
@@ -629,8 +632,12 @@ fun MessageInputText(
                                 addCategory(Intent.CATEGORY_OPENABLE)
                                 type = "audio/*"
 
-                                // Provide a list of more specific MIME types to filter for.
-                                val mimeTypes = arrayOf("audio/wav", "audio/x-wav")
+                                // Provide a list of more specific MIME types to filter for. Not
+                                // all providers honor this filter, so the actual format is
+                                // sniffed from the file's own bytes when it's picked (see
+                                // common/Utils.kt's convertAudioToMonoWithMaxSeconds).
+                                val mimeTypes =
+                                  arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3")
                                 putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
 
                                 // Single select.
@@ -1056,12 +1063,12 @@ private fun handleImagesSelected(
   }
 }
 
-private fun handleAudioWavSelected(
+private fun handleAudioFileSelected(
   context: Context,
   uri: Uri,
   onAudioSelected: (AudioClip) -> Unit,
 ) {
-  convertWavToMonoWithMaxSeconds(context = context, stereoUri = uri)?.let { audioClip ->
+  convertAudioToMonoWithMaxSeconds(context = context, uri = uri)?.let { audioClip ->
     onAudioSelected(audioClip)
   }
 }

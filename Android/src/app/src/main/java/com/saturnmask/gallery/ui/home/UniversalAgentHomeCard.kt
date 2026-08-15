@@ -53,6 +53,7 @@ import com.saturnmask.gallery.R
 import com.saturnmask.gallery.customtasks.universalagent.InstalledAppPickerBottomSheet
 import com.saturnmask.gallery.customtasks.universalagent.UniversalAgentDisclaimerDialog
 import com.saturnmask.gallery.customtasks.universalagent.isUniversalAgentAccessibilityServiceEnabled
+import com.saturnmask.gallery.customtasks.universalagent.requestIgnoreBatteryOptimizations
 import com.saturnmask.gallery.customtasks.universalagent.universalAgentEnablementStateFrom
 import com.saturnmask.gallery.customtasks.universalagent.universalAgentSettingsStoreFrom
 
@@ -200,6 +201,10 @@ fun UniversalAgentHomeCard(modifier: Modifier = Modifier) {
         if (!serviceEnabled) {
           context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        // The AccessibilityService itself has no foreground-service protection — ask to be
+        // exempted from OEM battery-optimization killing too, or aggressive battery managers can
+        // silently kill it in the background. No-op if already exempted.
+        requestIgnoreBatteryOptimizations(context)
       },
     )
   }

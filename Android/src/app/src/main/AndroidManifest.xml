@@ -33,6 +33,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Universal Agent's AccessibilityService has no foreground-service protection of its own;
+         this lets the app ask the user to exempt it from OEM battery-optimization killing. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
 
     <!-- Additional permission required for push notification handling -->

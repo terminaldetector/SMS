@@ -49,6 +49,10 @@ interface LlmModelHelper {
    * @param enableConversationConstrainedDecoding whether to enable constrained decoding for
    *   conversations.
    * @param coroutineScope optional coroutine scope for async execution.
+   * @param initialMessages prior conversation turns to replay into the freshly-created engine, so
+   *   switching backend/accelerator mid-chat doesn't silently forget everything (unlike
+   *   [resetConversation], this always creates a brand-new engine, so there's nothing to preserve
+   *   without explicitly replaying it here).
    */
   fun initialize(
     context: Context,
@@ -61,6 +65,7 @@ interface LlmModelHelper {
     tools: List<ToolProvider> = listOf(),
     enableConversationConstrainedDecoding: Boolean = false,
     coroutineScope: CoroutineScope? = null,
+    initialMessages: List<Message> = listOf(),
   )
 
   /**

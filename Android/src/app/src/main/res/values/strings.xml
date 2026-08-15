@@ -87,6 +87,10 @@
   <string name="drawer_search_provider_description" translatable="true">Configure the web search provider used by AI Chat</string>
   <string name="drawer_huggingface_label" translatable="true">HuggingFace</string>
   <string name="drawer_huggingface_description" translatable="true">Manage your HuggingFace access token</string>
+  <!-- Label for the drawer item that exports diagnostic/crash logs for bug reports. [CHAR_LIMIT=NONE] -->
+  <string name="drawer_export_logs_label" translatable="true">Export Logs</string>
+  <!-- Description for the drawer item that exports diagnostic/crash logs for bug reports. [CHAR_LIMIT=NONE] -->
+  <string name="drawer_export_logs_description" translatable="true">Save and share a diagnostics file to help report bugs</string>
   <string name="drawer_notifications_label" translatable="true">Notifications</string>
   <string name="drawer_notifications_description" translatable="true">View scheduled notifications</string>
   <string name="notifications_title" translatable="true">Notifications</string>
@@ -388,7 +392,15 @@
   <string name="mcp_server_authorization" translatable="true">Authorization</string>
   <string name="mcp_server_auth_none" translatable="true">None</string>
   <string name="mcp_server_auth_request_header" translatable="true">Request header</string>
-  <string name="mcp_server_auth_oauth_wip" translatable="true">OAuth (WIP)</string>
+  <string name="mcp_server_auth_oauth" translatable="true">OAuth</string>
+  <!-- Shown when this app couldn't automatically find OAuth configuration for a non-preset MCP
+       server URL (no RFC 9728/8414 metadata found at the well-known locations checked).
+       [CHAR_LIMIT=NONE] -->
+  <string name="mcp_server_oauth_discovery_failed" translatable="true">Couldn\'t find OAuth configuration for this server automatically. Try Request header instead if the server supports it.</string>
+  <!-- Shown when a non-preset MCP server's OAuth configuration was found, but the server doesn't
+       support automatic client registration (RFC 7591), so this app has no way to obtain a
+       client ID for it. [CHAR_LIMIT=NONE] -->
+  <string name="mcp_server_oauth_registration_unsupported" translatable="true">This server doesn\'t support automatic OAuth registration. Try Request header instead if the server supports it.</string>
   <string name="mcp_server_header_name" translatable="true">Header name</string>
   <string name="mcp_server_header_value" translatable="true">Header value</string>
 
@@ -521,6 +533,8 @@
   <string name="import_model" translatable="true">Import Model</string>
   <!-- Button label to confirm importing a model. [CHAR_LIMIT=NONE] -->
   <string name="import_action" translatable="true">Import</string>
+  <!-- Caption near the accelerator picker in the model import dialog, warning that GPU/NPU support varies by model architecture. [CHAR_LIMIT=NONE] -->
+  <string name="import_model_accelerator_warning" translatable="true">GPU/NPU compatibility depends on the model\'s architecture and may be unstable for non-Gemma models. If you see crashes or slow responses, try CPU instead.</string>
   <!-- Error message prefix when model import fails. [CHAR_LIMIT=NONE] -->
   <string name="failed_to_import" translatable="true">Failed to import</string>
   <!-- Error message when model import fails due to connection issue. [CHAR_LIMIT=NONE] -->
@@ -594,6 +608,8 @@
   <string name="config_label_use_gpu" translatable="true">Use GPU</string>
   <!-- Label for the 'Accelerator' option in the model configuration dialog. [CHAR_LIMIT=NONE] -->
   <string name="config_label_accelerator" translatable="true">Accelerator</string>
+  <!-- Badge in the chat top app bar showing which backend the model actually initialized with (may differ from the requested Accelerator if a fallback occurred). [CHAR_LIMIT=NONE] -->
+  <string name="model_page_active_backend" translatable="true">Running on %1$s</string>
   <!-- Label for the 'Vision accelerator' option in the model configuration dialog. [CHAR_LIMIT=NONE] -->
   <string name="config_label_vision_accelerator" translatable="true">Vision accelerator</string>
   <!-- Label for the 'Compatible accelerators' option in the model configuration dialog. [CHAR_LIMIT=NONE] -->

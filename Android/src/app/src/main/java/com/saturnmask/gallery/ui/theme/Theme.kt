@@ -316,5 +316,8 @@ fun GalleryTheme(content: @Composable () -> Unit) {
     }
 
     window.setBackgroundDrawable(ColorDrawable(windowBackgroundColor))
+    // Also paint the decor view directly: on some OEM ROMs the window background alone still lets a
+    // white decor surface show behind Compose in dark mode.
+    window.decorView.setBackgroundColor(windowBackgroundColor)
   }
 }

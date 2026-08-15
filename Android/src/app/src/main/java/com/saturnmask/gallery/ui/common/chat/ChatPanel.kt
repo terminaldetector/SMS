@@ -148,6 +148,10 @@ fun ChatPanel(
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
   emptyStateComposable: @Composable (Model) -> Unit = {},
+  // Rendered as a slim row directly above the message input (e.g. the agent Skills/RAG/Web-search
+  // icon toggles). Kept next to the input on purpose so the controls read as part of composing a
+  // message rather than a separate banner floating at the top of the screen.
+  composableAboveMessageInput: @Composable (Model) -> Unit = {},
   onFilePicked: (Uri) -> Unit = {},
 ) {
   val uiState by viewModel.uiState.collectAsState()
@@ -176,20 +180,6 @@ fun ChatPanel(
       }
       imageCount
     }
-  val audioClipMesssageCountToLastconfigChange =
-    remember(messages) {
-      var audioClipMessageCount = 0
-      for (message in messages.reversed()) {
-        if (message is ChatMessageConfigValuesChange) {
-          break
-        }
-        if (message is ChatMessageAudioClip) {
-          audioClipMessageCount++
-        }
-      }
-      audioClipMessageCount
-    }
-
   var curMessage by remember { mutableStateOf("") } // Correct state
   val focusManager = LocalFocusManager.current
 
@@ -323,7 +313,10 @@ fun ChatPanel(
     }
   }
 
-  Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+  Box(
+    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+    contentAlignment = Alignment.BottomCenter,
+  ) {
     // Audio record animation.
     AnimatedVisibility(
       showAudioRecorder,
@@ -349,10 +342,13 @@ fun ChatPanel(
       Box(
         contentAlignment = Alignment.BottomCenter,
         modifier =
-          Modifier.weight(1f).onSizeChanged {
-            // Update the viewport height when the size of the box changes.
-            viewportHeightPx = it.height
-          },
+          Modifier.weight(1f)
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .onSizeChanged {
+              // Update the viewport height when the size of the box changes.
+              viewportHeightPx = it.height
+            },
       ) {
         val cdChatPanel = stringResource(R.string.cd_chat_panel)
         Column(
@@ -670,6 +666,9 @@ fun ChatPanel(
       val modelNotSupportImageMsg = stringResource(R.string.model_not_support_image_message)
       val modelNotSupportAudioMsg = stringResource(R.string.model_not_support_audio_message)
 
+      // Slim controls row (Skills/RAG/Web-search toggles) sitting right above the input.
+      composableAboveMessageInput(selectedModel)
+
       MessageInputText(
         task = task,
         modelManagerViewModel = modelManagerViewModel,
@@ -678,7 +677,6 @@ fun ChatPanel(
         isResettingSession = uiState.isResettingSession,
         modelPreparing = uiState.preparing,
         imageCount = imageCountToLastConfigChange,
-        audioClipMessageCount = audioClipMesssageCountToLastconfigChange,
         modelInitializing =
           modelInitializationStatus?.status == ModelInitializationStatusType.INITIALIZING,
         textFieldPlaceHolderRes = task.textInputPlaceHolderRes,
