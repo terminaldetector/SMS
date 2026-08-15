@@ -158,7 +158,6 @@ fun MessageInputText(
   isResettingSession: Boolean,
   inProgress: Boolean,
   imageCount: Int,
-  audioClipMessageCount: Int,
   modelInitializing: Boolean,
   @StringRes textFieldPlaceHolderRes: Int,
   onValueChanged: (String) -> Unit,
@@ -223,7 +222,11 @@ fun MessageInputText(
   }
 
   val updatePickedAudioClips: (List<AudioClip>) -> Unit = { audioDataList ->
-    val maxAllowedForThisMessage = (MAX_AUDIO_CLIP_COUNT - audioClipMessageCount).coerceAtLeast(0)
+    // MAX_AUDIO_CLIP_COUNT caps how many clips can be staged for the NEXT outgoing message, not a
+    // running total across the whole chat -- a per-conversation cumulative count would (and did)
+    // permanently lock out audio attachments after the first message that included one, since
+    // nothing about sending/receiving a message ever decreases a lifetime total.
+    val maxAllowedForThisMessage = MAX_AUDIO_CLIP_COUNT
 
     val combinedSize = pickedAudioClips.size + audioDataList.size
     val withinLimit = combinedSize <= maxAllowedForThisMessage
@@ -554,7 +557,7 @@ fun MessageInputText(
                       // Audio related menu items.
                       if (showAudioPicker) {
                         val enableRecordAudioClipMenuItems =
-                          (audioClipMessageCount + pickedAudioClips.size) < MAX_AUDIO_CLIP_COUNT
+                          pickedAudioClips.size < MAX_AUDIO_CLIP_COUNT
                         val isAudioSupported = modelManagerUiState.selectedModel.llmSupportAudio
                         val audioItemColors =
                           MenuDefaults.itemColors(
