@@ -20,6 +20,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -40,6 +43,7 @@ import com.saturnmask.gallery.data.SAMPLE_RATE
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.net.HttpURLConnection
@@ -133,6 +137,212 @@ inline fun <reified T> parseJson(response: String): T? {
   } catch (e: Exception) {
     Log.e("AGUtils", "Error parsing JSON string", e)
     null
+  }
+}
+
+private enum class AudioFileFormat {
+  WAV,
+  MP3,
+  UNKNOWN,
+}
+
+/**
+ * Sniffs the first bytes of [uri]'s content to tell WAV and MP3 apart, rather than trusting the
+ * picker-reported MIME type -- some content providers ignore an ACTION_GET_CONTENT intent's
+ * EXTRA_MIME_TYPES filter, so a file can arrive here with a MIME type that doesn't match its
+ * actual bytes.
+ */
+private fun sniffAudioFileFormat(context: Context, uri: Uri): AudioFileFormat {
+  val header =
+    try {
+      val stream =
+        (if (uri.scheme == null || uri.scheme == "file") {
+          FileInputStream(uri.path ?: "")
+        } else {
+          context.contentResolver.openInputStream(uri)
+        }) ?: return AudioFileFormat.UNKNOWN
+      stream.use {
+        val buffer = ByteArray(12)
+        val bytesRead = it.read(buffer)
+        if (bytesRead <= 0) ByteArray(0) else buffer.copyOf(bytesRead)
+      }
+    } catch (e: Exception) {
+      return AudioFileFormat.UNKNOWN
+    }
+  return when {
+    header.size >= 12 &&
+      header[0] == 'R'.code.toByte() &&
+      header[1] == 'I'.code.toByte() &&
+      header[2] == 'F'.code.toByte() &&
+      header[3] == 'F'.code.toByte() &&
+      header[8] == 'W'.code.toByte() &&
+      header[9] == 'A'.code.toByte() &&
+      header[10] == 'V'.code.toByte() &&
+      header[11] == 'E'.code.toByte() -> AudioFileFormat.WAV
+    // ID3v2-tagged MP3.
+    header.size >= 3 &&
+      header[0] == 'I'.code.toByte() &&
+      header[1] == 'D'.code.toByte() &&
+      header[2] == '3'.code.toByte() -> AudioFileFormat.MP3
+    // Untagged MP3: raw MPEG frame sync (11 set bits at the start of a frame header).
+    header.size >= 2 &&
+      (header[0].toInt() and 0xFF) == 0xFF &&
+      (header[1].toInt() and 0xE0) == 0xE0 -> AudioFileFormat.MP3
+    else -> AudioFileFormat.UNKNOWN
+  }
+}
+
+/**
+ * Converts an audio file at [uri] to mono 16-bit PCM at (at least) [SAMPLE_RATE] Hz, trimmed to
+ * [maxSeconds] -- the shape the chat/model pipeline expects (see
+ * ui/llmchat/LlmChatModelHelper.kt's `Content.AudioBytes` usage). Dispatches to a WAV or MP3
+ * decode path based on [sniffAudioFileFormat]; returns null for anything else.
+ */
+fun convertAudioToMonoWithMaxSeconds(
+  context: Context,
+  uri: Uri,
+  maxSeconds: Int = 30,
+): AudioClip? =
+  when (sniffAudioFileFormat(context, uri)) {
+    AudioFileFormat.WAV -> convertWavToMonoWithMaxSeconds(context, uri, maxSeconds)
+    AudioFileFormat.MP3 -> convertMp3ToMonoWithMaxSeconds(context, uri, maxSeconds)
+    AudioFileFormat.UNKNOWN -> {
+      Log.e(TAG, "Unrecognized audio file format for $uri (not WAV or MP3)")
+      null
+    }
+  }
+
+/**
+ * Decodes an MP3 file at [uri] to mono 16-bit PCM via Android's built-in MediaExtractor/MediaCodec
+ * -- MP3 has been a mandatory platform codec since API 10, so no third-party decoder library is
+ * needed. Downmixes to mono before resampling (unlike [convertWavToMonoWithMaxSeconds], whose
+ * resample-then-downmix order only works for its own always-16-bit-PCM-source case) so the shared
+ * [resample] helper -- which only implements the mono case -- is always called with real mono
+ * data, regardless of whether the source MP3 was upsampled or downsampled relative to
+ * [SAMPLE_RATE].
+ */
+private fun convertMp3ToMonoWithMaxSeconds(
+  context: Context,
+  uri: Uri,
+  maxSeconds: Int,
+): AudioClip? {
+  var extractor: MediaExtractor? = null
+  var codec: MediaCodec? = null
+  try {
+    extractor = MediaExtractor()
+    extractor.setDataSource(context, uri, null)
+
+    var trackIndex = -1
+    var format: MediaFormat? = null
+    for (i in 0 until extractor.trackCount) {
+      val candidate = extractor.getTrackFormat(i)
+      if (candidate.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+        trackIndex = i
+        format = candidate
+        break
+      }
+    }
+    if (trackIndex == -1 || format == null) {
+      Log.e(TAG, "No audio track found in $uri")
+      return null
+    }
+    extractor.selectTrack(trackIndex)
+
+    val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
+    val sourceSampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+    val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+    Log.d(TAG, "MP3 track: mime=$mime, sampleRate=$sourceSampleRate, channels=$channels")
+
+    codec = MediaCodec.createDecoderByType(mime)
+    codec.configure(format, null, null, 0)
+    codec.start()
+
+    val pcmOut = ByteArrayOutputStream()
+    val bufferInfo = MediaCodec.BufferInfo()
+    var sawInputEos = false
+    var sawOutputEos = false
+    val timeoutUs = 10_000L
+    // Bounds how long a very long MP3 keeps decoding -- the precise trim-to-maxSeconds cut
+    // happens on the final mono/resampled samples below, same as the WAV path.
+    val maxRawBytes = (maxSeconds + 5).toLong() * sourceSampleRate * channels * 2
+
+    while (!sawOutputEos && pcmOut.size() < maxRawBytes) {
+      if (!sawInputEos) {
+        val inputIndex = codec.dequeueInputBuffer(timeoutUs)
+        if (inputIndex >= 0) {
+          val inputBuffer = codec.getInputBuffer(inputIndex)
+          val sampleSize = inputBuffer?.let { extractor.readSampleData(it, 0) } ?: -1
+          if (sampleSize < 0) {
+            codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            sawInputEos = true
+          } else {
+            codec.queueInputBuffer(inputIndex, 0, sampleSize, extractor.sampleTime, 0)
+            extractor.advance()
+          }
+        }
+      }
+      val outputIndex = codec.dequeueOutputBuffer(bufferInfo, timeoutUs)
+      if (outputIndex >= 0) {
+        if (bufferInfo.size > 0) {
+          codec.getOutputBuffer(outputIndex)?.let { outputBuffer ->
+            val chunk = ByteArray(bufferInfo.size)
+            outputBuffer.get(chunk)
+            pcmOut.write(chunk)
+          }
+        }
+        codec.releaseOutputBuffer(outputIndex, false)
+        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+          sawOutputEos = true
+        }
+      }
+    }
+
+    val decodedShortBuffer =
+      ByteBuffer.wrap(pcmOut.toByteArray()).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+    val decodedSamples = ShortArray(decodedShortBuffer.remaining())
+    decodedShortBuffer.get(decodedSamples)
+
+    // Downmix to mono first (at the source sample rate), matching the codebase's existing
+    // stereo-average approach in convertWavToMonoWithMaxSeconds.
+    var monoSamples =
+      if (channels == 2) {
+        val mono = ShortArray(decodedSamples.size / 2)
+        for (i in mono.indices) {
+          val left = decodedSamples[i * 2]
+          val right = decodedSamples[i * 2 + 1]
+          mono[i] = ((left + right) / 2).toShort()
+        }
+        mono
+      } else {
+        decodedSamples
+      }
+
+    var effectiveSampleRate = sourceSampleRate
+    if (sourceSampleRate != SAMPLE_RATE) {
+      Log.d(TAG, "Resampling MP3 from $sourceSampleRate Hz to $SAMPLE_RATE Hz.")
+      monoSamples = resample(monoSamples, sourceSampleRate, SAMPLE_RATE, channels = 1)
+      effectiveSampleRate = SAMPLE_RATE
+    }
+
+    val maxSamples = maxSeconds * effectiveSampleRate
+    if (monoSamples.size > maxSamples) {
+      monoSamples = monoSamples.copyOfRange(0, maxSamples)
+    }
+
+    val monoByteBuffer = ByteBuffer.allocate(monoSamples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+    monoByteBuffer.asShortBuffer().put(monoSamples)
+    return AudioClip(audioData = monoByteBuffer.array(), sampleRate = effectiveSampleRate)
+  } catch (e: Exception) {
+    Log.e(TAG, "Failed to decode mp3", e)
+    return null
+  } finally {
+    try {
+      codec?.stop()
+    } catch (e: Exception) {
+      // Already stopped/never started -- fine to ignore during cleanup.
+    }
+    codec?.release()
+    extractor?.release()
   }
 }
 
