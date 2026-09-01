@@ -38,6 +38,7 @@ import { HelixClient, InferMode, normalizeBaseUrl } from '@lib/helixClient'
 import { HelixCoordinator } from '@lib/helixCoordinator'
 import { hybridBlocker, HYBRID_TARGET } from '@lib/helixEngines'
 import { clearNetLog, formatNetLog, netLog, onNetLogChange, shouldReport } from '@lib/helixNetLog'
+import { benchmarkDevice, formatBench } from '@lib/helixBench'
 import { formatReach, reachAll } from '@lib/helixReach'
 import { meshSession, MeshMode } from '@lib/helixSession'
 import {
@@ -883,7 +884,17 @@ const HelixMeshScreen = () => {
             setShardRpcAddr(addr)
             // Announce it so the host can place layers here. If we've already joined, patch the
             // live card; otherwise onJoinAgent picks it up when joining.
-            agentRef.current?.updateCard({ rpc: addr, mem: deviceMemory().usable })
+            // Speed as well as size. The planner has always known what each phone can HOLD and
+            // nothing about how long it takes — so the phone with the most free RAM got the biggest
+            // band, and if it was also the slowest it set the pace for every token. The benchmark
+            // is ~120ms, once per app run, and rides in the ANNOUNCE field that already exists.
+            const bench = benchmarkDevice()
+            Logger.info(`Compute score for the mesh: ${formatBench(bench)}`)
+            agentRef.current?.updateCard({
+                rpc: addr,
+                mem: deviceMemory().usable,
+                tps: bench.score,
+            })
             // The number this phone is about to be planned against, with the steps that produced
             // it. The host's plan is only ever as good as this, and it is derived through several
             // stages that are each invisible on their own.
@@ -929,6 +940,10 @@ const HelixMeshScreen = () => {
                 id: `host-${agentId}`,
                 mem: deviceMemory().usable,
                 rpc: `${hostIp}:${rpcPort}`,
+                // The host measures itself by the same yardstick it judges the workers by —
+                // comparing a measured phone against unmeasured ones would be worse than
+                // comparing none of them, because the unmeasured would silently score zero.
+                tps: benchmarkDevice().score,
             }
             const workers = coord.agentInfo()
             const plan = planLocalShard(
@@ -944,7 +959,15 @@ const HelixMeshScreen = () => {
                     formatShardPlan(
                         plan,
                         { name: model.name, bytes: model.file_size, layers: nLayers },
-                        [hostNode, ...workers.map((w) => ({ id: w.id, mem: w.mem, rpc: w.rpc ?? '' }))]
+                        [
+                            hostNode,
+                            ...workers.map((w) => ({
+                                id: w.id,
+                                mem: w.mem,
+                                tps: w.tps,
+                                rpc: w.rpc ?? '',
+                            })),
+                        ]
                     )
             )
             setShardPlan(

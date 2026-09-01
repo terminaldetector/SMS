@@ -36,7 +36,8 @@ type Collected = { results: Record<string, string>; votes: Record<string, [strin
 type Agent = {
     conn: WsServerConnection
     lastSeen: number
-    mem: number // bytes the agent announced — the weight sharding places layers by
+    mem: number // bytes the agent announced — what this phone CAN hold
+    tps: number // measured throughput (helixBench score) — how FAST it holds it; 0 = never measured
     rpc: string // "host:port" of its llama.cpp rpc-server, '' if it isn't offering to hold layers
 }
 
@@ -44,6 +45,8 @@ type Agent = {
 export interface AgentInfo {
     id: string
     mem: number
+    /** Measured compute score; 0 when the phone never ran the benchmark. */
+    tps: number
     rpc: string
 }
 
@@ -136,6 +139,9 @@ export class HelixCoordinator {
                     conn,
                     lastSeen: Date.now(),
                     mem: Number(msg.body.mem ?? 0),
+                    // Already part of ANNOUNCE and already meaning throughput, so weighing layers
+                    // by speed needs no protocol change and no older phone drops a frame over it.
+                    tps: Number(msg.body.tps ?? 0),
                     rpc: String(msg.body.rpc ?? ''),
                 })
             } else if (msg.type === Msg.STATUS && typeof msg.body.log === 'string') {
@@ -198,7 +204,7 @@ export class HelixCoordinator {
     agentInfo(): AgentInfo[] {
         return this.agents().map((id) => {
             const a = this.conns.get(id)!
-            return { id, mem: a.mem, rpc: a.rpc }
+            return { id, mem: a.mem, tps: a.tps, rpc: a.rpc }
         })
     }
 

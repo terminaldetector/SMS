@@ -83,6 +83,12 @@ export interface ShardNode {
     id: string
     mem: number
     rpc: string
+    /**
+     * Measured compute score (helixBench). Optional, and absent means "not measured" rather than
+     * "slow" — planPlacement falls back to the memory-weighted rule when nobody reports one, so a
+     * mesh of phones that never benchmarked behaves exactly as it did before.
+     */
+    tps?: number
 }
 
 // Host phone, NO PC: plan the shard here from what the joined agents announced (memory + rpc
@@ -98,10 +104,12 @@ export function planLocalShard(
     if (!usable.length)
         throw new Error('no joined phone is offering to hold layers (enable sharding on it first)')
 
-    const members: Record<string, Capacity> = { [host.id]: { mem_bytes: host.mem } }
+    const members: Record<string, Capacity> = {
+        [host.id]: { mem_bytes: host.mem, ...(host.tps ? { cpu: host.tps } : {}) },
+    }
     const addrs: Record<string, string> = { [host.id]: host.rpc }
     for (const w of usable) {
-        members[w.id] = { mem_bytes: w.mem }
+        members[w.id] = { mem_bytes: w.mem, ...(w.tps ? { cpu: w.tps } : {}) }
         addrs[w.id] = w.rpc
     }
     // Host first: planPlacement treats ring[0] as main, and the driver has to be this phone.

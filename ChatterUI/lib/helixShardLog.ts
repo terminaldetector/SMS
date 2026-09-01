@@ -17,8 +17,10 @@ import type { RpcClusterPlan } from './helixPlacement'
 
 export interface ShardLogNode {
     id: string
-    /** Free memory this node offered, in bytes — what the split was actually weighted by. */
+    /** Free memory this node offered, in bytes — the cap on what it can be given. */
     mem: number
+    /** Measured compute score, 0 when never benchmarked. What the split is now weighted by. */
+    tps?: number
     rpc: string
 }
 
@@ -111,6 +113,16 @@ export function formatShardPlan(
     )
     lines.push(`Ring: ${plan.ring.join(' → ')} (main: ${plan.main})`)
     lines.push(`Free memory offered: ${gb(totalMem)} across ${nodes.length} phones`)
+    // Which rule actually produced this split. Without it a lopsided-looking plan reads as a bug,
+    // when it is the planner correctly favouring a phone that measured faster.
+    const measured = nodes.filter((n) => (n.tps ?? 0) > 0)
+    lines.push(
+        measured.length === nodes.length
+            ? 'Weighted by: measured speed, capped by each phone\'s free memory'
+            : measured.length === 0
+              ? 'Weighted by: free memory only — no phone reported a compute score'
+              : `Weighted by: free memory only — ${nodes.length - measured.length} of ${nodes.length} phones reported no compute score`
+    )
     if (model.bytes > 0)
         lines.push(
             totalMem >= model.bytes
@@ -136,6 +148,7 @@ export function formatShardPlan(
                 `\n    layers ${e.band[0]}–${e.band[1] - 1} (${layers}, ${pct(layers, plan.n_layers)})` +
                 `\n    ratio ${ratio === undefined ? '—' : ratio.toFixed(4)}` +
                 `\n    offered ${n ? gb(n.mem) : 'unknown'}` +
+                (n && (n.tps ?? 0) > 0 ? `, speed ${((n.tps ?? 0) / 1e6).toFixed(0)}M` : '') +
                 (perLayer > 0 && n
                     ? `, needs ~${gb(needs)}${needs > n.mem ? '  ← MORE THAN IT OFFERED' : ''}`
                     : '') +
